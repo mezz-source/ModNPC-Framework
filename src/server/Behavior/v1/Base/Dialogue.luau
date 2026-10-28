@@ -15,7 +15,6 @@ function Dialogue.new(Base: any, character: Model)
 	self.Data = self.CharacterAPI:RequestAPIData(Modules.ContentDelivery, Functions.GetLinesIndex, { character }) or {}
 
 	print("Dialogue data loaded for character:", character.Name, "Data:", self.Data)
-
 	return self
 end
 

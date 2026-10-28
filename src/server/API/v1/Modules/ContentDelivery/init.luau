@@ -228,8 +228,10 @@ function ContentDeliveryNetwork.init(_)
 		ContentDeliveryNetwork[key] = value
 	end
 
+	-- we're going to assign us as the content formatters
+	CharacterUtility.setContentValidator(ContentDeliveryNetwork.validContentFormat)
+
 	-- aint she a pretty thing
-	print("Total delivery network:", ContentDeliveryNetwork)
 	print("V1 ContentDeliveryNetwork initialized")
 end
 

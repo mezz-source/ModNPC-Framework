@@ -3,9 +3,27 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local CharacterUtility = require(script.Parent.CharacterUtility)
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
+local TypeMovement = require(ServerScriptService.ModNPCServer.Types.v1.TypeMovement)
+
+local MovementEnum = TypeMovement.MovementEnum
+
+-- Everything the facing loop needs each frame, looked up once when the focus is set
+type FocusEntry = {
+	Target: Instance,
+	Root: BasePart,
+	Alignment: AlignOrientation,
+	-- The last point written to the alignment, so an unchanged target doesn't rewrite (and replicate) it
+	LastPoint: Vector3?,
+}
+
+-- How far ahead of the root a directional move aims. Far enough that a caller re-issuing the move every
+-- tenth of a second or so never has the humanoid arrive and stall between calls.
+local MOVE_LEAD = 4
+-- A focus point that moved less than this (studs) isn't worth rewriting the alignment for
+local FACE_EPSILON = 0.1
 
 local Movement = {
-	FocusTargets = {},
+	FocusTargets = {} :: { [Model]: FocusEntry },
 }
 
 local function response(
@@ -24,7 +42,7 @@ local function response(
 end
 
 local function getCharacterParts(character: Model): (Humanoid?, BasePart?, AlignOrientation?)
-	local humanoid = CharacterUtility.getHumanoid(character).Data
+	local humanoid = CharacterUtility._getHumanoid(character)
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	local focusAlignment = rootPart and rootPart:IsA("BasePart") and rootPart:FindFirstChild("FocusAlignment")
 	return humanoid, rootPart :: BasePart?, focusAlignment :: AlignOrientation?
@@ -41,6 +59,22 @@ local function getTargetCFrame(target: Instance): CFrame?
 	return nil
 end
 
+-- The alignment looks at the position of its CFrame, so moving it to the target makes the root face the target.
+-- It is squashed down to our own height so the character doesn't trip.
+-- The alignment is only written when the point moved, since every write is a constraint update that replicates.
+local function faceTarget(focus: FocusEntry, targetCFrame: CFrame)
+	local targetPosition = targetCFrame.Position
+	local point = Vector3.new(targetPosition.X, focus.Root.Position.Y, targetPosition.Z)
+
+	local lastPoint = focus.LastPoint
+	if lastPoint and (point - lastPoint).Magnitude < FACE_EPSILON then
+		return
+	end
+
+	focus.LastPoint = point
+	focus.Alignment.CFrame = CFrame.new(point)
+end
+
 local function validateCharacter(character: Model): (Humanoid?, BasePart?, AlignOrientation?, string?)
 	if not character or not character:IsA("Model") then
 		return nil, nil, nil, "Invalid character"
@@ -54,7 +88,7 @@ local function validateCharacter(character: Model): (Humanoid?, BasePart?, Align
 end
 
 local function getHumanoid(character: Model): (Humanoid?, string?)
-	local humanoid = CharacterUtility.getHumanoid(character).Data
+	local humanoid = CharacterUtility._getHumanoid(character)
 	if not humanoid then
 		return nil, "Character is missing a Humanoid"
 	end
@@ -83,8 +117,9 @@ function Movement.setWalkSpeed(character: Model, speed: number): TypeModuleRespo
 	return response(true, "Character walk speed set", TypeRequests.Enums.StatusCode.Success)
 end
 
+-- Only needs the humanoid, so it skips the full validateCharacter (focus alignment lookups etc.)
 function Movement.moveTo(character: Model, position: Vector3): TypeModuleResponse.ModuleResponse
-	local humanoid, _, _, errorMessage = validateCharacter(character)
+	local humanoid, errorMessage = getHumanoid(character)
 	if not humanoid or typeof(position) ~= "Vector3" then
 		return response(false, errorMessage or "Position must be a Vector3", TypeRequests.Enums.StatusCode.Conflict)
 	end
@@ -93,6 +128,53 @@ function Movement.moveTo(character: Model, position: Vector3): TypeModuleRespons
 end
 
 Movement.walkTo = Movement.moveTo
+
+-- Walk in a direction relative to where the character is facing. The caller never has to read the character's
+-- transform, and it costs one request instead of a read plus a MoveTo.
+function Movement.moveInDirection(character: Model, direction: TypeMovement.MovementDirection): TypeModuleResponse.ModuleResponse
+	local humanoid = CharacterUtility._getHumanoid(character)
+	local rootPart = CharacterUtility._getRootPart(character)
+	if not humanoid or not rootPart then
+		return response(
+			false,
+			"Character is missing a Humanoid or root part",
+			TypeRequests.Enums.StatusCode.Conflict
+		)
+	end
+
+	local transform = rootPart.CFrame
+	local offset
+	if direction == MovementEnum.Left then
+		offset = -transform.RightVector
+	elseif direction == MovementEnum.Right then
+		offset = transform.RightVector
+	elseif direction == MovementEnum.Forward then
+		offset = transform.LookVector
+	elseif direction == MovementEnum.Backward then
+		offset = -transform.LookVector
+	else
+		return response(false, "Invalid movement direction", TypeRequests.Enums.StatusCode.Conflict)
+	end
+
+	humanoid:MoveTo(transform.Position + offset * MOVE_LEAD)
+	return response(true, "Character moving in direction", TypeRequests.Enums.StatusCode.Success)
+end
+
+-- Cancel any move in progress by walking to where we already are
+function Movement.stopMoving(character: Model): TypeModuleResponse.ModuleResponse
+	local humanoid = CharacterUtility._getHumanoid(character)
+	local rootPart = CharacterUtility._getRootPart(character)
+	if not humanoid or not rootPart then
+		return response(
+			false,
+			"Character is missing a Humanoid or root part",
+			TypeRequests.Enums.StatusCode.Conflict
+		)
+	end
+
+	humanoid:MoveTo(rootPart.Position)
+	return response(true, "Character stopped moving", TypeRequests.Enums.StatusCode.Success)
+end
 
 function Movement.lockCharacter(character: Model): TypeModuleResponse.ModuleResponse
 	local humanoid, _, _, errorMessage = validateCharacter(character)
@@ -133,19 +215,21 @@ function Movement.unlockRotation(character: Model): TypeModuleResponse.ModuleRes
 end
 
 function Movement.setFocusTarget(character: Model, target: Instance): TypeModuleResponse.ModuleResponse
-	local _, _, focusAlignment, errorMessage = validateCharacter(character)
-	if not focusAlignment then
+	local _, rootPart, focusAlignment, errorMessage = validateCharacter(character)
+	if not focusAlignment or not rootPart then
 		return response(false, errorMessage, TypeRequests.Enums.StatusCode.Conflict)
 	end
-	if not target or not target:IsDescendantOf(game) or not getTargetCFrame(target) then
+	local targetCFrame = target and target:IsDescendantOf(game) and getTargetCFrame(target)
+	if not targetCFrame then
 		return response(
 			false,
 			"Focus target must be a BasePart, Attachment, or Model with a PrimaryPart",
 			TypeRequests.Enums.StatusCode.Conflict
 		)
 	end
-	Movement.FocusTargets[character] = target
-	focusAlignment.CFrame = getTargetCFrame(target)
+	local focus: FocusEntry = { Target = target, Root = rootPart, Alignment = focusAlignment, LastPoint = nil }
+	Movement.FocusTargets[character] = focus
+	faceTarget(focus, targetCFrame)
 	return response(true, "Focus target set", TypeRequests.Enums.StatusCode.Success)
 end
 
@@ -192,16 +276,28 @@ end
 
 function Movement.init(_)
 	RunService.Heartbeat:Connect(function()
-		for character, target in pairs(Movement.FocusTargets) do
-			local _, refPart, focusAlignment = validateCharacter(character)
+		for character, focus in pairs(Movement.FocusTargets) do
+			if not character.Parent then
+				Movement.FocusTargets[character] = nil
+				continue
+			end
+
+			-- the parts were looked up when the focus was set, so only look again if one was swapped out
+			if focus.Root.Parent ~= character or focus.Alignment.Parent ~= focus.Root then
+				local _, refPart, focusAlignment = validateCharacter(character)
+				if not refPart or not focusAlignment then
+					Movement.FocusTargets[character] = nil
+					continue
+				end
+				focus.Root, focus.Alignment, focus.LastPoint = refPart, focusAlignment, nil
+			end
+
+			local target = focus.Target
 			local targetCFrame = target.Parent and getTargetCFrame(target)
-			if not character.Parent or not focusAlignment or not targetCFrame then
+			if not targetCFrame then
 				Movement.FocusTargets[character] = nil
 			else
-				-- This squashes it down so the character doesn't trip
-				local adjustedPosition =
-					CFrame.new(targetCFrame.Position.X, refPart.Position.Y, targetCFrame.Position.Z)
-				focusAlignment.CFrame = adjustedPosition
+				faceTarget(focus, targetCFrame)
 			end
 		end
 	end)

@@ -46,6 +46,17 @@ TypeCharacterEvents.Names = table.freeze({
 		AnimationStopped = "AnimationStopped",
 		DeathFinished = "AnimationDeathFinished",
 	},
+	Thought = {
+		-- Payload: number, seconds elapsed since the previous ReactionUpdate
+		ReactionUpdate = "ThoughtReactionUpdate",
+	},
+	Targetting = {
+		FocusedTargetChanged = "FocusedTargetChanged",
+		NewFocusTarget = "NewFocusTarget",
+		LostFocusTarget = "LostFocusTarget",
+		TargetLost = "TargetLost",
+		TargetSpotted = "TargetSpotted"
+	}
 })
 
 return TypeCharacterEvents

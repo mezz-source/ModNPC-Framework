@@ -100,9 +100,8 @@ local function handleRequest(request: APIRequest): APIResponse
 		)
 	end
 
-	local success, result = pcall(function()
-		return module[request.Function](unpack(request.Arguments))
-	end)
+	-- passing the function straight to pcall avoids a closure allocation on every request
+	local success, result = pcall(module[request.Function], unpack(request.Arguments or {}))
 
 	if not success then
 		return errorResponse(

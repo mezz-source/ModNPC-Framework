@@ -15,20 +15,6 @@ function Movement.new(base, character)
 	return self
 end
 
-function Movement:_directionToMoveVector(direction: TypeMovement.MovementDirection): Vector3
-	if direction == MovementEnum.Left then
-		return -self.Character.PrimaryPart.CFrame.RightVector
-	elseif direction == MovementEnum.Right then
-		return self.Character.PrimaryPart.CFrame.RightVector
-	elseif direction == MovementEnum.Forward then
-		return self.Character.PrimaryPart.CFrame.LookVector
-	elseif direction == MovementEnum.Backward then
-		return -self.Character.PrimaryPart.CFrame.LookVector
-	else
-		return Vector3.zero
-	end
-end
-
 function Movement:_lockRotation()
 	self.rotationLocked = true
 	return self.CharacterAPI:LockRotation()
@@ -77,17 +63,17 @@ function Movement:MoveBackward()
 	self:Move(MovementEnum.Backward)
 end
 
+-- Relative to the way the character faces; the API works out where that is
 function Movement:Move(direction: TypeMovement.MovementDirection)
-	local moveDirection = self:_directionToMoveVector(direction)
-	return self.CharacterAPI:MoveTo(self.Character.PrimaryPart.Position + moveDirection)
+	return self.CharacterAPI:MoveInDirection(direction)
 end
 
 function Movement:MoveTo(position: Vector3)
 	return self.CharacterAPI:MoveTo(position)
 end
 
-function Movement:WalkTo(position: Vector3)
-	return self.CharacterAPI:WalkTo(position)
+function Movement:StopMoving()
+	return self.CharacterAPI:StopMoving()
 end
 
 function Movement:SetFocusTarget(target: Instance)
@@ -125,8 +111,13 @@ function Movement:DodgeBackward()
 end
 
 function Movement:Dodge(direction: TypeMovement.MovementDirection)
-	local dodgeDirection = self:_directionToMoveVector(direction)
-	-- TODO: dodging
+	-- TODO: dodging, which will need an API primitive for the burst of movement in `direction`
+end
+
+-- Whether the character is currently able to be evasive (strafing, dodging, ...)
+-- TODO: stub, should account for things like stuns, attacks in progress, and being airborne
+function Movement:CanBeEvasive(): boolean
+	return true
 end
 
 function Movement:Init()

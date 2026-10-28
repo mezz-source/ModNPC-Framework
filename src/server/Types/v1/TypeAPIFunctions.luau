@@ -1,3 +1,5 @@
+local ServerScriptService = game:GetService("ServerScriptService")
+local Targetting = require(ServerScriptService.ModNPCServer.API.v1.Modules.Targetting)
 local TypeAPI = {}
 
 export type Module =
@@ -24,10 +26,12 @@ TypeAPI.Functions = table.freeze({
 		GetHumanoid = "getHumanoid",
 		GetHealth = "getHealth",
 		GetMaxHealth = "getMaxHealth",
+		GetHealthInfo = "getHealthInfo",
 		GetRootPart = "getRootPart",
 		IsValidCharacter = "isValidCharacter",
 		IsValidModNPC = "isValidModNPC",
 		GetCharacterInfo = "getCharacterInfo",
+		GetTeam = "getTeam",
 	},
 	Damage = {
 		TakeDamage = "takeDamage",
@@ -59,14 +63,23 @@ TypeAPI.Functions = table.freeze({
 		SetLevelSetting = "setLevelSetting",
 		SetMovementSetting = "setMovementSetting",
 		InvalidateConfiguration = "invalidate",
+		WatchConfiguration = "watchConfiguration",
+		UnwatchConfiguration = "unwatchConfiguration",
 		GetLines = "getLines",
 		GetConversation = "getConversation",
 		GetLinesIndex = "getLinesIndex",
 		GetModules = "getModules",
+		GetModScripts = "getModScripts",
+		GetRange = "getRange",
+		GetThoughtSetting = "getThoughtSetting",
+		SetRange = "setRange",
+		SetThoughtSetting = "setThoughtSetting",
 	},
 	Movement = {
 		MoveTo = "moveTo",
 		WalkTo = "walkTo",
+		MoveInDirection = "moveInDirection",
+		StopMoving = "stopMoving",
 		LockCharacter = "lockCharacter",
 		UnlockCharacter = "unlockCharacter",
 		LockRotation = "lockRotation",
@@ -78,6 +91,12 @@ TypeAPI.Functions = table.freeze({
 		SetWalkSpeed = "setWalkSpeed",
 		Jump = "jump",
 	},
+	Targetting = {
+		GetTargets = "getTargets",
+		GetTargetsOfType = "getTargetsOfType",
+		GetTargetsWithTeamFilter = "getTargetsWithTeamFilter",
+		GetDistance = "getDistance",
+	}
 })
 
 return TypeAPI

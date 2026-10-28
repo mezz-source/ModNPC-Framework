@@ -19,6 +19,8 @@ rojo serve
 Characters expose movement through `CharacterAPI`:
 
 - `MoveTo(position)` / `WalkTo(position)` move the humanoid to a `Vector3`.
+- `MoveInDirection(direction)` walks `Left`/`Right`/`Forward`/`Backward` relative to where the character faces.
+- `StopMoving()` cancels the move in progress.
 - `LockCharacter()` / `UnlockCharacter()` only toggle `Humanoid.AutoRotate`.
 - `LockRotation()` / `UnlockRotation()` toggle AutoRotate and the validated `FocusAlignment`.
 - `SetFocusTarget(instance)` tracks a `BasePart`, `Attachment`, or model with a primary part.
@@ -27,3 +29,35 @@ Characters expose movement through `CharacterAPI`:
 - `ApplyAngularImpulse(angularVelocityChange)` applies an angular impulse scaled by `AssemblyMass`.
 
 For more help, check out [the Rojo documentation](https://rojo.space/docs).
+
+## Character tasks
+
+Each character has a scheduler and a library of predefined tasks. Task
+constructors validate their declared Base-module dependencies before returning
+a task. The scheduler owns task updates and removes tasks when they complete or
+are stopped:
+
+```luau
+local jumpTask, creationError = base.CharacterTasks.JumpTask.new()
+
+if not jumpTask then
+	warn("Could not create jump task:", creationError)
+else
+	local task, startError = base.Tasks:Start(jumpTask)
+	if not task then
+		warn("Could not start jump task:", startError)
+	end
+end
+
+-- A running task can be stopped explicitly:
+if jumpTask then
+	base.Tasks:Stop(jumpTask, "Interrupted")
+end
+```
+
+Tasks declare a category, resources, and policy. The example jump task uses the
+`Movement` category and resource with the `Replace` policy, so starting another
+movement task that uses the same resource stops the jump task. Task cancellation
+is cooperative and task termination is signaled once through the task's
+`Terminated` signal. Its declared `Humanoid` and `Movement` dependencies must
+exist on `Base`, or construction returns `nil, errorMessage`.

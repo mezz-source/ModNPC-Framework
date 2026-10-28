@@ -52,6 +52,12 @@ function Animation.new(Base: {}, character: Model)
 
 	self.sprintSpeedScale = self.Base.Configuration:GetMovementSetting("SprintSpeed")
 	self.walkSpeedScale = self.Base.Configuration:GetMovementSetting("WalkSpeed")
+	table.insert(self.EventSubscriptions, self.Base.Configuration:Observe({ "Movement", "SprintSpeed" }, function(value)
+		self.sprintSpeedScale = value
+	end))
+	table.insert(self.EventSubscriptions, self.Base.Configuration:Observe({ "Movement", "WalkSpeed" }, function(value)
+		self.walkSpeedScale = value
+	end))
 
 	self:_loadBaseAnimations()
 

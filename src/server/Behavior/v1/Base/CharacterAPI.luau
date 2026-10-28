@@ -2,6 +2,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local TypeAPIFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeAPIFunctions)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
 local TypeDamage = require(ServerScriptService.ModNPCServer.Types.v1.TypeDamage)
+local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
+local TypeMovement = require(ServerScriptService.ModNPCServer.Types.v1.TypeMovement)
 local CharacterAPI = {}
 CharacterAPI.__index = CharacterAPI
 
@@ -106,8 +108,13 @@ function CharacterAPI:MoveTo(position: Vector3)
 	return self:RequestAPI(Modules.Movement, MovementFunctions.MoveTo, { self.Character, position })
 end
 
-function CharacterAPI:WalkTo(position: Vector3)
-	return self:RequestAPI(Modules.Movement, MovementFunctions.WalkTo, { self.Character, position })
+-- Walk relative to the way the character is facing, without the caller needing the character's transform
+function CharacterAPI:MoveInDirection(direction: TypeMovement.MovementDirection)
+	return self:RequestAPI(Modules.Movement, MovementFunctions.MoveInDirection, { self.Character, direction })
+end
+
+function CharacterAPI:StopMoving()
+	return self:RequestAPI(Modules.Movement, MovementFunctions.StopMoving, { self.Character })
 end
 
 function CharacterAPI:LockCharacter()
@@ -156,6 +163,100 @@ function CharacterAPI:ValidateCharacter()
 	return self:RequestAPIData(Modules.CharacterUtility, CharacterFunctions.IsValidModNPC, { self.Character }) == true
 end
 
+function CharacterAPI:GetModScripts(): { {} }
+	if self.ModScripts then
+		return self.ModScripts
+	end
+
+	self.ModScripts = self:RequestAPIData(
+		Modules.ContentDelivery,
+		Functions.ContentDelivery.GetModScripts,
+		{ self.Character }
+	) or {}
+
+	return self.ModScripts
+end
+
+-- Targetting
+
+function CharacterAPI:GetAllTargets(): { TypeTargetting.TargettingContext }
+	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetTargets, nil) or {}
+end
+
+function CharacterAPI:GetTargetsOfType(characterType: string): { TypeTargetting.TargettingContext }
+	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetTargetsOfType, { characterType }) or {}
+end
+
+function CharacterAPI:GetTeam(): string?
+	return self:RequestAPIData(Modules.CharacterUtility, CharacterFunctions.GetTeam, { self.Character })
+end
+
+-- Root part to root part distance in studs between two characters, nil if either has no root
+function CharacterAPI:GetDistanceBetween(from: Model, to: Model): number?
+	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetDistance, { from, to })
+end
+
+-- Distance from this character to the target
+function CharacterAPI:GetDistanceTo(target: Model): number?
+	return self:GetDistanceBetween(self.Character, target)
+end
+
+-- Health queries default to this character when no character is given
+function CharacterAPI:GetHealth(character: Model?): number?
+	return self:RequestAPIData(Modules.CharacterUtility, CharacterFunctions.GetHealth, { character or self.Character })
+end
+
+function CharacterAPI:GetMaxHealth(character: Model?): number?
+	return self:RequestAPIData(
+		Modules.CharacterUtility,
+		CharacterFunctions.GetMaxHealth,
+		{ character or self.Character }
+	)
+end
+
+function CharacterAPI:GetHealthInfo(character: Model?): TypeTargetting.HealthInfo?
+	return self:RequestAPIData(
+		Modules.CharacterUtility,
+		CharacterFunctions.GetHealthInfo,
+		{ character or self.Character }
+	)
+end
+
+-- Only targets on one of the given teams
+function CharacterAPI:GetTargetsOnTeams(teams: { string }): { TypeTargetting.TargettingContext }
+	return self:RequestAPIData(
+		Modules.Targetting,
+		Functions.Targetting.GetTargetsWithTeamFilter,
+		{ TypeTargetting.FilterTypes.Include, teams }
+	) or {}
+end
+
+-- Every target not on one of the given teams
+function CharacterAPI:GetTargetsExcludingTeams(teams: { string }): { TypeTargetting.TargettingContext }
+	return self:RequestAPIData(
+		Modules.Targetting,
+		Functions.Targetting.GetTargetsWithTeamFilter,
+		{ TypeTargetting.FilterTypes.Exclude, teams }
+	) or {}
+end
+
+-- Targets on a different team than this character; excludes the character itself
+function CharacterAPI:GetOpposingTargets(): { TypeTargetting.TargettingContext }
+	local team = self:GetTeam()
+	local targets = if team then self:GetTargetsExcludingTeams({ team }) else self:GetAllTargets()
+	return self:_withoutSelf(targets)
+end
+
+-- Targets on the same team as this character; excludes the character itself
+function CharacterAPI:GetSameTeamTargets(): { TypeTargetting.TargettingContext }
+	local team = self:GetTeam()
+	if not team then
+		return {}
+	end
+
+	return self:_withoutSelf(self:GetTargetsOnTeams({ team }))
+end
+
 -- Requests
 
 function CharacterAPI:RequestAPI(moduleName: Module, functionName: string, arguments: { any }?)
@@ -182,6 +283,16 @@ end
 	INTERNAL
 ]]
 
+function CharacterAPI:_withoutSelf(targets: { TypeTargetting.TargettingContext }): { TypeTargetting.TargettingContext }
+	local filtered = {}
+	for _, context in targets do
+		if context.Character ~= self.Character then
+			table.insert(filtered, context)
+		end
+	end
+	return filtered
+end
+
 function CharacterAPI:_handleDamage(damageContext: TypeDamage.IncomingDamageContext): TypeDamage.OutgoingDamageContext
 	local didHit = math.random(1, 2) == 1
 	local context = {
@@ -206,6 +317,7 @@ function CharacterAPI.new(Base: {}, character: Model)
 	self.Base = Base
 	self.FunctionConnection = nil
 	self.EventConnection = nil
+	self.ModScripts = nil
 	return self
 end
 

@@ -38,6 +38,10 @@ function Humanoid.new(Base: {}, character: Model)
 	return self
 end
 
+function Humanoid:IsGrounded()
+	return self.Humanoid.FloorMaterial ~= Enum.Material.Air
+end
+
 function Humanoid:_cleanConnections()
 	for _, connection in ipairs(self.connections) do
 		connection:Disconnect()

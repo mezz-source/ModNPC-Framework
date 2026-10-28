@@ -1,0 +1,21 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "RunVSCodeCommand",
+      "type": "shell",
+      "command": "echo 'Triggering VS Code Command...'",
+      // This input variable acts as a hook to execute the command palette action
+      "args": ["${input:executeTargetCommand}"],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "executeTargetCommand",
+      "type": "command",
+      // Replace this with any internal VS Code command ID
+      "command": "RDB.runStudio" 
+    }
+  ]
+}

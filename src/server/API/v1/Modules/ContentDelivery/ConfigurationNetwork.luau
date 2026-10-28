@@ -17,6 +17,21 @@ local baseConfiguration: Folder?
 local baseConfigurationIndex: ConfigurationIndex?
 local configurationIndexes: { [Model]: ConfigurationIndex } = {}
 
+-- Per-character listeners for changes made outside of this module (e.g. a studio script editing a ValueBase).
+-- Known holds the last value we announced for each setting, which is how our own writes (setSetting)
+-- are told apart from external ones so an update event is never sent twice.
+type Watcher = {
+	Folder: Folder,
+	Known: { [Instance]: any },
+	ValueConnections: { [Instance]: RBXScriptConnection },
+	Connections: { RBXScriptConnection },
+}
+local watchers: { [Model]: Watcher } = {}
+
+local ConfigEvents = TypeCharacterEvents.Names.Configuration
+
+local ModAssets = ServerScriptService:WaitForChild("ModAssets")
+
 local function response(success: boolean, message: string, data: any?): ModuleResponse
 	return {
 		Success = success,
@@ -157,9 +172,186 @@ local function validateSchemaFolder(configurationFolder: Folder, schemaFolder: F
 	return true, ""
 end
 
+local function getStartTasks(character: Model): (boolean, {string})
+	local configurationFolder = getConfigurationFolder(character)
+	if not configurationFolder then
+		warn("Missing configuration folder")
+		return false, {}
+	end	
+
+	local StartTasks = configurationFolder:FindFirstChild("StartTasks")
+	if not StartTasks then
+		warn("Missing StartTasks folder")
+		return false, {}
+	end
+
+	local startTasks: {string} = {}
+
+	for _, child in ipairs(StartTasks:GetChildren()) do
+		if not child:IsA("ValueBase") then
+			warn(child, "in start tasks is not a usable value")
+			continue
+		end
+
+		table.insert(startTasks, child.Name)
+	end
+
+	return true, startTasks
+end
+
+local function getRelativePath(folder: Folder, instance: Instance): { string }?
+	local path = {}
+	local current: Instance? = instance
+	while current and current ~= folder do
+		table.insert(path, 1, current.Name)
+		current = current.Parent
+	end
+
+	if not current then
+		return nil
+	end
+
+	return path
+end
+
+local function announce(character: Model, eventName: string, payload: any?)
+	local eventResponse = CharacterUtility.sendEvent(character, eventName, payload)
+	if not eventResponse.Success then
+		warn("Configuration event", eventName, "was not delivered to", character.Name, "-", eventResponse.Message)
+	end
+end
+
+local function connectValue(character: Model, watcher: Watcher, instance: Instance)
+	if watcher.ValueConnections[instance] then
+		return
+	end
+
+	local success, value = InstanceSearch.getPrimitiveValue(instance)
+	if not success then
+		return
+	end
+
+	watcher.Known[instance] = value
+	watcher.ValueConnections[instance] = (instance :: ValueBase).Changed:Connect(function()
+		local valid, newValue = InstanceSearch.getPrimitiveValue(instance)
+		local previous = watcher.Known[instance]
+		if not valid or newValue == previous then
+			-- unreadable, or a write we already announced (setSetting records it before writing)
+			return
+		end
+
+		local path = getRelativePath(watcher.Folder, instance)
+		if not path then
+			print("couldn't find path")
+			return
+		end
+
+		watcher.Known[instance] = newValue
+		configurationIndexes[character] = nil
+
+		announce(character, ConfigEvents.ConfigurationUpdated, {
+			Path = path,
+			Previous = previous,
+			Value = newValue,
+			Type = instance.ClassName,
+		})
+	end)
+end
+
+local function disconnectValue(watcher: Watcher, instance: Instance)
+	local connection = watcher.ValueConnections[instance]
+	if connection then
+		connection:Disconnect()
+	end
+	watcher.ValueConnections[instance] = nil
+	watcher.Known[instance] = nil
+end
+
+local function unwatch(character: Model)
+	local watcher = watchers[character]
+	if not watcher then
+		return
+	end
+
+	watchers[character] = nil
+	configurationIndexes[character] = nil
+
+	for _, connection in ipairs(watcher.Connections) do
+		connection:Disconnect()
+	end
+	for _, connection in pairs(watcher.ValueConnections) do
+		connection:Disconnect()
+	end
+end
+
+local function watch(character: Model): boolean
+	if watchers[character] then
+		return true
+	end
+
+	local folder = getConfigurationFolder(character)
+	if not folder then
+		return false
+	end
+
+	local watcher: Watcher = {
+		Folder = folder,
+		Known = {},
+		ValueConnections = {},
+		Connections = {},
+	}
+	watchers[character] = watcher
+
+	for _, descendant in ipairs(folder:GetDescendants()) do
+		if descendant:IsA("ValueBase") then
+			connectValue(character, watcher, descendant)
+		end
+	end
+
+	-- the structure changed, so cached indexes (ours and the character's) are stale
+	local function structureChanged()
+		configurationIndexes[character] = nil
+		announce(character, ConfigEvents.ConfigurationInvalidated)
+	end
+
+	table.insert(
+		watcher.Connections,
+		folder.DescendantAdded:Connect(function(descendant)
+			if descendant:IsA("ValueBase") then
+				connectValue(character, watcher, descendant)
+			end
+			structureChanged()
+		end)
+	)
+	table.insert(
+		watcher.Connections,
+		folder.DescendantRemoving:Connect(function(descendant)
+			disconnectValue(watcher, descendant)
+			structureChanged()
+		end)
+	)
+
+	-- the connection ends with the character
+	table.insert(
+		watcher.Connections,
+		character.Destroying:Connect(function()
+			unwatch(character)
+		end)
+	)
+
+	return true
+end
+
 function ConfigurationNetwork.init(network)
 	contentDeliveryNetwork = network
-	local candidate = ServerScriptService:WaitForChild("_v1_BASE_CONFIG")
+
+	-- This is a bit of a nasty depend chain, but configuration knows the game here
+	-- FIX-ME: there's gotta be a better way of doing this
+	CharacterUtility.setTeamGetter(function(character: Model): TypeModuleResponse.ModuleResponse
+		return ConfigurationNetwork.getTeamSetting(character, "TeamName")
+	end)
+
+	local candidate = ModAssets:WaitForChild("_v1_BASE_CONFIG")
 	baseConfiguration = if candidate then candidate else nil
 	baseConfigurationIndex = if baseConfiguration then buildIndex(baseConfiguration) else nil
 end
@@ -215,6 +407,27 @@ function ConfigurationNetwork.getMovementSetting(character: Model, settingName: 
 	return ConfigurationNetwork.getSetting(character, { "Movement", settingName })
 end
 
+function ConfigurationNetwork.getThoughtSetting(character: Model, settingName: string): ModuleResponse
+	return ConfigurationNetwork.getSetting(character, { "ThoughtProcess", settingName })
+end
+
+function ConfigurationNetwork.getTeamSetting(character: Model, settingName: string): ModuleResponse
+	return ConfigurationNetwork.getSetting(character, { "Team", settingName })
+end
+
+function ConfigurationNetwork.getStartTasks(character: Model, settingName: string): ModuleResponse
+	local success, taskResponse = getStartTasks(character)
+	if not success then
+		return response(false, "Failure retrieving start tasks")
+	end
+
+	return response(true, "Start tasks retrieved", taskResponse)
+end
+
+function ConfigurationNetwork.getRange(character: Model, settingName: string): ModuleResponse
+	return ConfigurationNetwork.getSetting(character, { "Ranges", settingName })
+end
+
 function ConfigurationNetwork.setSetting(
 	character: Model,
 	path: { string },
@@ -239,10 +452,16 @@ function ConfigurationNetwork.setSetting(
 		return response(false, "Configuration value type does not match the existing setting")
 	end
 
+	-- record the value first so the watcher treats the resulting Changed signal as already announced
+	local watcher = watchers[character]
+	if watcher and watcher.ValueConnections[setting] then
+		watcher.Known[setting] = value
+	end
+
 	(setting :: any).Value = value
 	configurationIndexes[character] = nil
 
-	local eventResponse = CharacterUtility.sendEvent(character, TypeCharacterEvents.Names.ConfigurationUpdated, {
+	local eventResponse = CharacterUtility.sendEvent(character, ConfigEvents.ConfigurationUpdated, {
 		Path = path,
 		Previous = previousValue,
 		Value = value,
@@ -279,9 +498,47 @@ function ConfigurationNetwork.setMovementSetting(
 	return ConfigurationNetwork.setSetting(character, { "Movement", settingName }, value)
 end
 
+function ConfigurationNetwork.setThoughtSetting(
+	character: Model,
+	settingName: string,
+	value: TypeCDN.PrimitiveValue
+): ModuleResponse
+	return ConfigurationNetwork.setSetting(character, { "ThoughtProcess", settingName }, value)
+end
+
+function ConfigurationNetwork.setTeamSetting(
+	character: Model,
+	settingName: string,
+	value: TypeCDN.PrimitiveValue
+): ModuleResponse
+	return ConfigurationNetwork.setSetting(character, { "Team", settingName }, value)
+end
+
+function ConfigurationNetwork.setRange(
+	character: Model,
+	settingName: string,
+	value: TypeCDN.PrimitiveValue
+): ModuleResponse
+	return ConfigurationNetwork.setSetting(character, { "Ranges", settingName }, value)
+end
+
 function ConfigurationNetwork.invalidate(character: Model): ModuleResponse
 	configurationIndexes[character] = nil
 	return response(true, "Configuration index invalidated")
+end
+
+-- Starts announcing configuration changes made outside of setSetting. Safe to call repeatedly.
+function ConfigurationNetwork.watchConfiguration(character: Model): ModuleResponse
+	if not watch(character) then
+		return response(false, "Configuration folder not found")
+	end
+
+	return response(true, "Configuration is being watched")
+end
+
+function ConfigurationNetwork.unwatchConfiguration(character: Model): ModuleResponse
+	unwatch(character)
+	return response(true, "Configuration is no longer being watched")
 end
 
 return ConfigurationNetwork

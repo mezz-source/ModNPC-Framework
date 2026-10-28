@@ -44,6 +44,22 @@ local function hasAPIInit(moduleScript: ModuleScript): boolean
 	return typeof(module.apiInit) == "function"
 end
 
+local function getModScripts(modsFolder: Folder): { {} }
+	local modules = {}
+	for _, descendant in ipairs(modsFolder:GetDescendants()) do
+		if descendant:IsA("ModuleScript") then
+			local success, module = pcall(require, descendant)
+			if not success then
+				warn("Failed to load mod script:", descendant:GetFullName(), module)
+			elseif typeof(module) == "table" and typeof(module.init) == "function" then
+				table.insert(modules, module)
+			end
+		end
+	end
+
+	return modules
+end
+
 local function discoverModules(modsFolder: Folder): { ModData }
 	local modules = {}
 	for _, descendant in ipairs(modsFolder:GetDescendants()) do
@@ -77,6 +93,15 @@ function ModsNetwork.getModules(character: Model): ModuleResponse
 	end
 
 	return response(true, "Mod modules discovered", discoverModules(modsFolder))
+end
+
+function ModsNetwork.getModScripts(character: Model): ModuleResponse
+	local modsFolder = getModsFolder(character)
+	if not modsFolder then
+		return response(false, "Mods folder not found")
+	end
+
+	return response(true, "Mod scripts loaded", getModScripts(modsFolder))
 end
 
 return ModsNetwork

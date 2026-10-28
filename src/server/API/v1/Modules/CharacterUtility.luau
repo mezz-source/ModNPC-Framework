@@ -14,6 +14,11 @@ local BINDS_FOLDER_NAME = CharacterUtility.CoreFolderNames.Binds
 local CHARACTER_FUNCTION_BIND_NAME = CharacterUtility.CoreFolderNames.CharacterFunction
 local CHARACTER_EVENT_BIND_NAME = CharacterUtility.CoreFolderNames.CharacterEvent
 
+type ModuleResponse = TypeModuleResponse.ModuleResponse
+
+local contentValidationFunction: (Model) -> ModuleResponse = nil
+local teamGetterFunction: (Model) -> ModuleResponse = nil
+
 CharacterUtility.Type = {
 	Generic = "Generic",
 	ModNPC = "ModNPC",
@@ -80,10 +85,15 @@ local function ensureFocusAlignment(character: Model): AlignOrientation?
 		focusAlignment = nil
 	end
 
+	-- This runs on every character validation (team lookups, target searches, ...), not just once.
+	-- Enabled belongs to Movement.lockRotation/unlockRotation, so it is only defaulted when we create the alignment,
+	-- otherwise the next validation would switch an active focus alignment back off.
+	local created = false
 	if not focusAlignment then
 		focusAlignment = Instance.new("AlignOrientation")
 		focusAlignment.Name = "FocusAlignment"
 		focusAlignment.Parent = rootPart
+		created = true
 	end
 
 	local focusAttachment = rootPart:FindFirstChild("FocusAttachment")
@@ -104,7 +114,9 @@ local function ensureFocusAlignment(character: Model): AlignOrientation?
 	focusAlignment.AlignType = Enum.AlignType.PrimaryAxisLookAt
 	focusAlignment.Responsiveness = 25
 	focusAlignment.Attachment0 = focusAttachment
-	focusAlignment.Enabled = false
+	if created then
+		focusAlignment.Enabled = false
+	end
 
 	return focusAlignment
 end
@@ -134,17 +146,17 @@ end
 
 local function getCharacterEventBind(character: Model)
 	local ModNPCFolder = character:FindFirstChild(ROOT_FOLDER_NAME)
-	if not ModNPCFolder or not ModNPCFolder:IsA("Folder") then
+	if not ModNPCFolder then
 		return nil
 	end
 
 	local InternalFolder = ModNPCFolder:FindFirstChild(INTERNAL_FOLDER_NAME)
-	if not InternalFolder or not InternalFolder:IsA("Folder") then
+	if not InternalFolder then
 		return nil
 	end
 
 	local BindsFolder = InternalFolder:FindFirstChild(BINDS_FOLDER_NAME)
-	if not BindsFolder or not BindsFolder:IsA("Folder") then
+	if not BindsFolder then
 		return nil
 	end
 	local CharacterEventBindable = BindsFolder:FindFirstChild(CHARACTER_EVENT_BIND_NAME)
@@ -154,10 +166,10 @@ local function getCharacterEventBind(character: Model)
 	return CharacterEventBindable
 end
 
-local function validateModNPC(ModNPCFolder: Folder, character: Model): CharacterType
+local function validateModNPC(ModNPCFolder: Folder, character: Model, skipUnloadedCheck: boolean?): CharacterType
 	-- Verify folder has the required assets
 	local UnloadedIndicator = character:FindFirstChild("_UNLOADED")
-	if UnloadedIndicator then
+	if UnloadedIndicator and not skipUnloadedCheck then
 		warn(character.Name, "ModNPC is unloaded, skipping validation")
 		return CharacterUtility.Type.Generic
 	end
@@ -220,49 +232,68 @@ local function validateModNPC(ModNPCFolder: Folder, character: Model): Character
 		return CharacterUtility.Type.Generic
 	end
 
-	-- Last walk validation--the most expensive
-	-- we cant aquire directly as the character due to cyclic :(
-	-- FIX-ME: maybe move validation here?
-	if CharacterUtility.API then
-		local request = {
-			ModuleName = "ContentDelivery",
-			Function = "validContentFormat",
-			Arguments = { character },
-		}
-
-		local response = CharacterUtility.API._internalRequest(request)
-		if not response.Success then
-			warn(character.Name, BASE_MESSAGE .. " (content format invalid): " .. (response.Message or "unknown error"))
+	-- Check with out CDN whether or not they got their ModNPC format in order
+	-- It's not mission critical without it, as it's only nil really early in load
+	-- NPCs can't hit the nil case
+	if contentValidationFunction then
+		local result = contentValidationFunction(character)
+		if not result or not result.Success then
 			return CharacterUtility.Type.Generic
 		end
-	else
-		warn(character.Name, BASE_MESSAGE .. " (content format validation skipped): API not initialized")
 	end
 
 	return CharacterUtility.Type.ModNPC
 end
 
-local function getCharacterType(character: Model): CharacterType?
+local function getCharacterType(character: Model, allowUnloaded: boolean?): CharacterType?
 	if not isValidCharacter(character) then
 		return nil
 	end
 
 	local ModNPCFolder = character:FindFirstChild(ROOT_FOLDER_NAME)
 	if ModNPCFolder then
-		return validateModNPC(ModNPCFolder, character)
+		return validateModNPC(ModNPCFolder, character, allowUnloaded)
 	end
 
 	return CharacterUtility.Type.Generic
 end
 
-function CharacterUtility.getCharacterType(character: Model): TypeModuleResponse.ModuleResponse
+local function getCharacterTeam(character: Model): string
+	local allowUnloaded = true
+	local characterType = getCharacterType(character, allowUnloaded)
+	if characterType == CharacterUtility.Type.ModNPC then
+		local returnData = teamGetterFunction(character).Data -- {"Name": "xyz", "Value": "teamname"}
+		return returnData.Value :: string
+	else
+		-- We're going to do broad checks to see if we can pick up legacy values/indicators
+		warn("No team integration for non-mods yet", characterType, teamGetterFunction)
+	end
+
+	return "Neutral"
+end
+
+-- This will allow the content delivery network passthrough
+function CharacterUtility.setContentValidator(fn: (Model) -> ModuleResponse)
+	contentValidationFunction = fn
+end
+
+function CharacterUtility.setTeamGetter(fn: (Model) -> ModuleResponse)
+	teamGetterFunction = fn
+end
+
+function CharacterUtility.getCharacterType(character: Model, allowUnloaded: boolean?): TypeModuleResponse.ModuleResponse
 	return response(
 		true,
 		true,
 		TypeRequests.Enums.StatusCode.Success,
 		"Character type retrieved successfully",
-		getCharacterType(character)
+		getCharacterType(character, allowUnloaded)
 	)
+end
+
+function CharacterUtility.getTeam(character: Model): TypeModuleResponse.ModuleResponse
+	local teamName = getCharacterTeam(character)
+	return response(true, true, TypeRequests.Enums.StatusCode.Success, "Team retrieved successfully", teamName)
 end
 
 function CharacterUtility.getForceField(character: Model): TypeModuleResponse.ModuleResponse
@@ -306,6 +337,25 @@ function CharacterUtility.getMaxHealth(character: Model): TypeModuleResponse.Mod
 		TypeRequests.Enums.StatusCode.Success,
 		"Maximum health retrieved successfully",
 		humanoid.MaxHealth
+	)
+end
+
+-- Health, max health, and the 0..1 fraction in one request, for comparing targets
+function CharacterUtility.getHealthInfo(character: Model): TypeModuleResponse.ModuleResponse
+	local humanoid = getHumanoid(character)
+	if not humanoid then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Character does not have a humanoid")
+	end
+
+	local health, maxHealth = humanoid.Health, humanoid.MaxHealth
+	local fraction = if maxHealth > 0 then math.clamp(health / maxHealth, 0, 1) else 0
+
+	return response(
+		true,
+		true,
+		TypeRequests.Enums.StatusCode.Success,
+		"Health info retrieved successfully",
+		{ Health = health, MaxHealth = maxHealth, Fraction = fraction }
 	)
 end
 
@@ -394,6 +444,21 @@ function CharacterUtility.sendEvent(
 
 	characterEvent:Fire(eventName, arguments)
 	return response(true, true, TypeRequests.Enums.StatusCode.Success, "Character event sent successfully")
+end
+
+-- Plain lookups for other API modules on hot paths (per-frame requests), where building a ModuleResponse
+-- for every humanoid/root part lookup is wasted garbage. Not reachable as useful requests, hence the underscore.
+function CharacterUtility._getHumanoid(character: Model): Humanoid?
+	return getHumanoid(character)
+end
+
+function CharacterUtility._getRootPart(character: Model): BasePart?
+	return getRootPart(character)
+end
+
+function CharacterUtility._validationReady(): boolean
+	local isReady = teamGetterFunction and contentValidationFunction
+	return isReady
 end
 
 function CharacterUtility.init(api: {}?)

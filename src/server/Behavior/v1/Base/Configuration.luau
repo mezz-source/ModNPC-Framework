@@ -42,6 +42,8 @@ function Configuration.new(Base, character: Model)
 			self:_refresh()
 		end),
 	}
+	-- listen before reading the index so no external change slips between the two
+	self.CharacterAPI:RequestAPIData(Modules.ContentDelivery, Functions.WatchConfiguration, { character })
 	self.Data = self.CharacterAPI:RequestAPIData(
 		Modules.ContentDelivery,
 		Functions.GetConfigurationIndex,
@@ -58,13 +60,43 @@ function Configuration:Destroy()
 		subscription.Unsubscribe()
 	end
 	self.EventSubscriptions = {}
+	if self.CharacterAPI and self.Character then
+		self:Unwatch()
+	end
 	self.Base = nil
 	self.Character = nil
 	self.CharacterAPI = nil
 end
 
+-- Stops listening for external configuration changes (called when the character dies)
+function Configuration:Unwatch()
+	self.CharacterAPI:RequestAPIData(Modules.ContentDelivery, Functions.UnwatchConfiguration, { self.Character })
+end
+
+-- Calls callback(newValue, previousValue) whenever the setting at key changes (set through the API or externally).
+-- Our own update subscription is registered first, so Get already returns the new value inside the callback.
+function Configuration:Observe(key: string | { string }, callback: (any, any) -> ())
+	local path = getPath(key)
+	return self.Base.Events:Subscribe(ConfigEvents.ConfigurationUpdated, function(payload)
+		if type(payload) ~= "table" or type(payload.Path) ~= "table" or #payload.Path ~= #path then
+			return
+		end
+
+		for position, name in ipairs(path) do
+			if payload.Path[position] ~= name then
+				return
+			end
+		end
+		callback(payload.Value, payload.Previous)
+	end)
+end
+
 function Configuration:GetData()
 	return self.Data
+end
+
+function Configuration:GetFolderValues(key: string)
+
 end
 
 function Configuration:GetEntry(key: string | { string })
@@ -78,6 +110,25 @@ end
 
 function Configuration:GetDamageSetting(settingName: string): any
 	return self:Get({ "Damage", settingName })
+end
+
+function Configuration:GetThoughtSetting(settingName: string): any
+	return self:Get({ "ThoughtProcess", settingName })
+end
+
+function Configuration:GetStartTasks(): {string}
+	local startTasks = self.Data.StartTasks
+	local tasks = {}
+	
+	for name, _ in pairs(startTasks) do
+		table.insert(tasks, name)
+	end
+
+	return tasks
+end
+
+function Configuration:GetRange(settingName: string): any
+	return self:Get({ "Ranges", settingName })
 end
 
 function Configuration:GetLevelSetting(settingName: string): any
