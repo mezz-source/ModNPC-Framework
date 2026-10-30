@@ -4,8 +4,10 @@ local ContentDeliveryNetwork = {}
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
 local AssetsNetwork = require(script.AssetsNetwork)
+local AttacksNetwork = require(script.AttacksNetwork)
 local ConfigurationNetwork = require(script.ConfigurationNetwork)
 local LinesNetwork = require(script.LinesNetwork)
+local ModFolder = require(script.ModFolder)
 local ModsNetwork = require(script.ModsNetwork)
 local CharacterUtility = require(script.Parent.CharacterUtility)
 local CoreNames = CharacterUtility.CoreFolderNames
@@ -89,6 +91,10 @@ local function validateModsFolder(folder: Folder): (boolean, string)
 	return ModsNetwork.validateModsFolder(folder)
 end
 
+local function validateAttacksFolder(folder: Folder): (boolean, string)
+	return AttacksNetwork.validateAttacksFolder(folder)
+end
+
 local function validateLinesFolder(folder: Folder): (boolean, string)
 	return LinesNetwork.validateLinesFolder(folder)
 end
@@ -96,6 +102,32 @@ end
 local function validateConfigurationFolder(folder: Folder): (boolean, string)
 	return ConfigurationNetwork.validateConfigurationFolder(folder)
 end
+
+-- Mod folder kinds. Each one lists the directories it requires, in the order they are validated.
+-- Config directories are checked against the kind's sample configuration under ServerScriptService.ModAssets.
+ModFolder.register({
+	Name = ModFolder.Kinds.ModNPC,
+	RootName = CoreNames.Root,
+	SchemaName = "_v1_MODNPC_CONFIG",
+	Directories = {
+		{ Name = CoreNames.Lines, Validator = validateLinesFolder },
+		{ Name = CoreNames.Assets, Validator = validateAssetsFolder },
+		{ Name = CoreNames.Configuration, Validator = validateConfigurationFolder },
+		{ Name = CoreNames.Mods, Validator = validateModsFolder },
+		{ Name = CoreNames.Attacks, Validator = validateAttacksFolder },
+	},
+})
+
+ModFolder.register({
+	Name = ModFolder.Kinds.ModWeapon,
+	RootName = "ModWeapon",
+	SchemaName = "_v1_MODWEAPON_CONFIG",
+	Directories = {
+		{ Name = CoreNames.Assets, Validator = validateAssetsFolder },
+		{ Name = CoreNames.Configuration, Validator = ModFolder.schemaValidator(ModFolder.Kinds.ModWeapon) },
+		{ Name = CoreNames.Attacks, Validator = validateAttacksFolder },
+	},
+})
 
 function ContentDeliveryNetwork.getRootFolder(character: Model): ModuleResponse
 	local folder = getRootFolder(character)
@@ -142,51 +174,29 @@ function ContentDeliveryNetwork.getAssetsFolder(character: Model): ModuleRespons
 	return response(true, true, TypeRequests.Enums.StatusCode.Success, "Assets folder found", folder)
 end
 
+-- Validates the mod folder of the given kind (ModFolder.Kinds) found inside `container`: a character, a tool, ...
+-- Each kind is held to its own directories and its own sample configuration.
+function ContentDeliveryNetwork.validModFolder(kindName: string, container: Instance): ModuleResponse
+	local root = ModFolder.find(container, kindName)
+	if not root then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, kindName .. " folder not found")
+	end
+
+	local isValid, errorMessage = ModFolder.validate(kindName, root)
+	if not isValid then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, errorMessage)
+	end
+
+	return response(true, true, TypeRequests.Enums.StatusCode.Success, kindName .. " content format is valid")
+end
+
+-- The CharacterUtility content validator: a character is a ModNPC when its ModNPC folder is valid.
 function ContentDeliveryNetwork.validContentFormat(character: Model): ModuleResponse
 	if not character:IsA("Model") then
 		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Provided character is not a Model")
 	end
 
-	local linesFolder = getLinesFolder(character)
-	local assetsFolder = getAssetsFolder(character)
-	local configurationFolder = getConfigurationFolder(character)
-	local modsFolder = getModsFolder(character)
-
-	-- generally speaking this doesn't get here, as validation passes through the CharacterUtility module
-	-- never hurts though as this function is supposed to survive!
-	if not linesFolder or not assetsFolder or not configurationFolder or not modsFolder then
-		return response(
-			false,
-			true,
-			TypeRequests.Enums.StatusCode.Conflict,
-			"Character is missing one or more required folders"
-		)
-	end
-
-	local function validate(name: string, folder: Folder, func: (Folder) -> (boolean, string)): nil | string
-		local isValid, errorMessage = func(folder)
-		if not isValid then
-			return name .. " folder validation failed: " .. errorMessage
-		end
-
-		return nil
-	end
-
-	local validationFunctions = {
-		{ Name = "Lines", Folder = linesFolder, Func = validateLinesFolder },
-		{ Name = "Assets", Folder = assetsFolder, Func = validateAssetsFolder },
-		{ Name = "Configuration", Folder = configurationFolder, Func = validateConfigurationFolder },
-		{ Name = "Mods", Folder = modsFolder, Func = validateModsFolder },
-	}
-
-	for _, validation in ipairs(validationFunctions) do
-		local errorMessage = validate(validation.Name, validation.Folder, validation.Func)
-		if errorMessage then
-			return response(false, true, TypeRequests.Enums.StatusCode.Conflict, errorMessage)
-		end
-	end
-
-	return response(true, true, TypeRequests.Enums.StatusCode.Success, "Character content format is valid")
+	return ContentDeliveryNetwork.validModFolder(ModFolder.Kinds.ModNPC, character)
 end
 
 function ContentDeliveryNetwork.init(_)
@@ -196,6 +206,7 @@ function ContentDeliveryNetwork.init(_)
 	-- (and we have enough goofy enum behavior already)
 	local modules = {
 		AssetsNetwork,
+		AttacksNetwork,
 		ConfigurationNetwork,
 		LinesNetwork,
 		ModsNetwork,

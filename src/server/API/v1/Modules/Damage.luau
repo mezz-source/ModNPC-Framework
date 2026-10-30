@@ -47,10 +47,50 @@ function Damage.takeHumanoidDamage(character: Model, amount: number): TypeModule
 	end
 end
 
-function Damage.takeDamage(attacker: Model?, receiver: Model, amount: number): TypeModuleResponse.ModuleResponse
-	print("Damage module: takeDamage called with attacker:", attacker, "receiver:", receiver, "and amount:", amount)
+-- Gives health back, up to the max. Refuses a dead humanoid: health can't bring it back to life.
+function Damage.restoreHumanoidHealth(character: Model, amount: number): TypeModuleResponse.ModuleResponse
+	if not character or not character:IsA("Model") then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Invalid character for restoreHumanoidHealth")
+	end
+
+	-- written this way round so NaN fails too
+	if type(amount) ~= "number" or not (amount > 0) then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Health to restore must be more than zero")
+	end
+
+	local humanoid = CharacterUtility.getHumanoid(character).Data
+	if not humanoid or humanoid.Health <= 0 then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Character has no living humanoid to restore")
+	end
+
+	local restored = math.min(humanoid.Health + amount, humanoid.MaxHealth)
+	if restored <= humanoid.Health then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Humanoid is already at max health")
+	end
+
+	humanoid.Health = restored
+	return response(true, true, TypeRequests.Enums.StatusCode.Success, "Humanoid health restored successfully", restored)
+end
+
+function Damage.takeDamage(
+	attacker: Model?,
+	receiver: Model,
+	amount: number,
+	damageType: TypeDamage.DamageType?,
+	special: TypeDamage.DamageSpecial?,
+	maxStaggerTime: number?
+): TypeModuleResponse.ModuleResponse
 	if not receiver or not receiver:IsA("Model") then
 		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Invalid receiver for takeDamage")
+	end
+
+	if special ~= nil and TypeDamage.Specials[special] == nil then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Unknown damage special: " .. tostring(special))
+	end
+
+	-- written this way round so NaN fails too
+	if maxStaggerTime ~= nil and (type(maxStaggerTime) ~= "number" or not (maxStaggerTime >= 0)) then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Max stagger time must be zero or more seconds")
 	end
 
 	local characterType = CharacterUtility.getCharacterType(receiver).Data
@@ -62,6 +102,9 @@ function Damage.takeDamage(attacker: Model?, receiver: Model, amount: number): T
 		Attacker = attacker,
 		Receiver = receiver,
 		Amount = amount,
+		DamageType = damageType,
+		Special = special,
+		MaxStaggerTime = maxStaggerTime,
 	}
 
 	if characterType == CharacterUtility.Type.ModNPC then
@@ -82,8 +125,12 @@ function Damage.takeDamage(attacker: Model?, receiver: Model, amount: number): T
 			Attacker = attacker,
 			Receiver = receiver,
 			Amount = responseData.Amount,
+			DamageType = damageType,
 			DidHit = responseData.DidHit,
 			RecieveType = responseData.RecieveType,
+			Special = responseData.Special,
+			StaggerDuration = responseData.StaggerDuration,
+			Resisted = responseData.Resisted,
 		}
 
 		return response(
@@ -110,6 +157,7 @@ function Damage.takeDamage(attacker: Model?, receiver: Model, amount: number): T
 			Attacker = attacker,
 			Receiver = receiver,
 			Amount = amount,
+			DamageType = damageType,
 			DidHit = amount > 0,
 			RecieveType = TypeDamage.RecieveTypes.Hit,
 		}

@@ -19,6 +19,8 @@ type FocusEntry = {
 -- How far ahead of the root a directional move aims. Far enough that a caller re-issuing the move every
 -- tenth of a second or so never has the humanoid arrive and stall between calls.
 local MOVE_LEAD = 4
+-- Combined directions shorter than this are treated as cancelling out
+local CANCEL_EPSILON = 0.01
 -- A focus point that moved less than this (studs) isn't worth rewriting the alignment for
 local FACE_EPSILON = 0.1
 
@@ -131,7 +133,12 @@ Movement.walkTo = Movement.moveTo
 
 -- Walk in a direction relative to where the character is facing. The caller never has to read the character's
 -- transform, and it costs one request instead of a read plus a MoveTo.
-function Movement.moveInDirection(character: Model, direction: TypeMovement.MovementDirection): TypeModuleResponse.ModuleResponse
+-- Several directions are summed into one heading, so a character can advance and strafe in a single move.
+-- Directions that cancel out (Left + Right) leave nowhere to go, which stops the character.
+function Movement.moveInDirection(
+	character: Model,
+	directions: TypeMovement.MovementDirections
+): TypeModuleResponse.ModuleResponse
 	local humanoid = CharacterUtility._getHumanoid(character)
 	local rootPart = CharacterUtility._getRootPart(character)
 	if not humanoid or not rootPart then
@@ -142,21 +149,29 @@ function Movement.moveInDirection(character: Model, direction: TypeMovement.Move
 		)
 	end
 
+	local list = if type(directions) == "table" then directions else { directions }
 	local transform = rootPart.CFrame
-	local offset
-	if direction == MovementEnum.Left then
-		offset = -transform.RightVector
-	elseif direction == MovementEnum.Right then
-		offset = transform.RightVector
-	elseif direction == MovementEnum.Forward then
-		offset = transform.LookVector
-	elseif direction == MovementEnum.Backward then
-		offset = -transform.LookVector
-	else
-		return response(false, "Invalid movement direction", TypeRequests.Enums.StatusCode.Conflict)
+	local offset = Vector3.zero
+	for _, direction in list do
+		if direction == MovementEnum.Left then
+			offset -= transform.RightVector
+		elseif direction == MovementEnum.Right then
+			offset += transform.RightVector
+		elseif direction == MovementEnum.Forward then
+			offset += transform.LookVector
+		elseif direction == MovementEnum.Backward then
+			offset -= transform.LookVector
+		else
+			return response(false, "Invalid movement direction", TypeRequests.Enums.StatusCode.Conflict)
+		end
 	end
 
-	humanoid:MoveTo(transform.Position + offset * MOVE_LEAD)
+	if offset.Magnitude < CANCEL_EPSILON then
+		humanoid:MoveTo(transform.Position)
+		return response(true, "Movement directions cancelled out", TypeRequests.Enums.StatusCode.Success)
+	end
+
+	humanoid:MoveTo(transform.Position + offset.Unit * MOVE_LEAD)
 	return response(true, "Character moving in direction", TypeRequests.Enums.StatusCode.Success)
 end
 
@@ -272,6 +287,107 @@ function Movement.applyAngularImpulse(
 	return applyMassScaledImpulse(character, angularVelocityChange, function(rootPart, impulse)
 		rootPart:ApplyAngularImpulse(impulse)
 	end)
+end
+
+-- A burst of `velocityChange` studs/s along directions relative to where the character faces (summed like
+-- moveInDirection, so Forward + Left is a diagonal), flattened to horizontal. Scaled by mass, like applyImpulse.
+function Movement.applyImpulseInDirection(
+	character: Model,
+	directions: TypeMovement.MovementDirections,
+	velocityChange: number
+): TypeModuleResponse.ModuleResponse
+	local rootPart = if typeof(character) == "Instance" and character:IsA("Model")
+		then CharacterUtility._getRootPart(character)
+		else nil
+	if not rootPart then
+		return response(false, "Character is missing a root part", TypeRequests.Enums.StatusCode.Conflict)
+	end
+	if typeof(velocityChange) ~= "number" or velocityChange ~= velocityChange then
+		return response(false, "Velocity change must be a number", TypeRequests.Enums.StatusCode.Conflict)
+	end
+
+	local list = if type(directions) == "table" then directions else { directions }
+	local transform = rootPart.CFrame
+	local offset = Vector3.zero
+	for _, direction in list do
+		if direction == MovementEnum.Left then
+			offset -= transform.RightVector
+		elseif direction == MovementEnum.Right then
+			offset += transform.RightVector
+		elseif direction == MovementEnum.Forward then
+			offset += transform.LookVector
+		elseif direction == MovementEnum.Backward then
+			offset -= transform.LookVector
+		else
+			return response(false, "Invalid movement direction", TypeRequests.Enums.StatusCode.Conflict)
+		end
+	end
+
+	local flat = Vector3.new(offset.X, 0, offset.Z)
+	if flat.Magnitude < CANCEL_EPSILON then
+		return response(false, "Movement directions cancelled out", TypeRequests.Enums.StatusCode.Conflict)
+	end
+
+	rootPart:ApplyImpulse(flat.Unit * velocityChange * rootPart.AssemblyMass)
+	return response(true, "Impulse applied", TypeRequests.Enums.StatusCode.Success)
+end
+
+-- Unlike applyImpulse these take a force, applied as it is: the same force moves a light character further than a heavy one.
+-- Only the root part is needed, so any character can be pushed (players and plain rigs included), but ownership of a
+-- client-owned character is up to the caller.
+local function applyHorizontalForce(
+	character: Model,
+	direction: Vector3,
+	force: number
+): TypeModuleResponse.ModuleResponse
+	local rootPart = if typeof(character) == "Instance" and character:IsA("Model")
+		then CharacterUtility._getRootPart(character)
+		else nil
+	if not rootPart then
+		return response(false, "Character is missing a root part", TypeRequests.Enums.StatusCode.Conflict)
+	end
+	if typeof(force) ~= "number" or force ~= force or force < 0 then
+		return response(false, "Force must be a non-negative number", TypeRequests.Enums.StatusCode.Conflict)
+	end
+
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	if flat.Magnitude < CANCEL_EPSILON then
+		return response(false, "There is no horizontal direction to push in", TypeRequests.Enums.StatusCode.Conflict)
+	end
+
+	rootPart:ApplyImpulse(flat.Unit * force)
+	return response(true, "Force applied", TypeRequests.Enums.StatusCode.Success)
+end
+
+-- Throws the character the way it faces
+function Movement.applyForwardImpulse(character: Model, force: number): TypeModuleResponse.ModuleResponse
+	local rootPart = if typeof(character) == "Instance" and character:IsA("Model")
+		then CharacterUtility._getRootPart(character)
+		else nil
+	if not rootPart then
+		return response(false, "Character is missing a root part", TypeRequests.Enums.StatusCode.Conflict)
+	end
+
+	return applyHorizontalForce(character, rootPart.CFrame.LookVector, force)
+end
+
+-- Throws the character away from another one (knockback)
+function Movement.applyImpulseAwayFrom(
+	character: Model,
+	origin: Model,
+	force: number
+): TypeModuleResponse.ModuleResponse
+	local rootPart = if typeof(character) == "Instance" and character:IsA("Model")
+		then CharacterUtility._getRootPart(character)
+		else nil
+	local originRoot = if typeof(origin) == "Instance" and origin:IsA("Model")
+		then CharacterUtility._getRootPart(origin)
+		else nil
+	if not rootPart or not originRoot then
+		return response(false, "Character and origin both need a root part", TypeRequests.Enums.StatusCode.Conflict)
+	end
+
+	return applyHorizontalForce(character, rootPart.Position - originRoot.Position, force)
 end
 
 function Movement.init(_)

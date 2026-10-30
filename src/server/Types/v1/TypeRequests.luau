@@ -4,6 +4,8 @@ export type APIRequest = {
 	ModuleName: string,
 	Function: string,
 	Arguments: any,
+	-- fire and forget: the API runs the request deferred and returns nothing, failures are only warned
+	NoResponse: boolean?,
 }
 
 export type APIResponse = {

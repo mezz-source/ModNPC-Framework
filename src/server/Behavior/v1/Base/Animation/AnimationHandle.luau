@@ -1,5 +1,6 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local Signal = require(ServerScriptService.ModNPCServer.Util.Signal)
+local MarkerTimes = require(script.Parent.MarkerTimes)
 local MarkerTranslator = require(script.Parent.MarkerTranslator)
 
 local AnimationHandle = {}
@@ -29,7 +30,53 @@ function AnimationHandle.new(track: AnimationTrack)
 	table.insert(self._connections, forwardSignal(track.DidLoop, self.DidLoop))
 	table.insert(self._connections, forwardSignal(track.KeyframeReached, self.KeyframeReached))
 
+	-- so the marker times are known by the time anyone asks (see GetTimeUntilMarker)
+	MarkerTimes.Preload(track.Animation.AnimationId)
+
 	return self
+end
+
+-- Seconds the animation lasts at normal speed, 0 until it has loaded
+function AnimationHandle:GetLength(): number
+	return self._track.Length
+end
+
+-- When the marker happens, in animation seconds (at normal speed from the start). Nil while that isn't known yet, see
+-- MarkerTimes.
+function AnimationHandle:GetMarkerTime(markerName: string): number?
+	return MarkerTimes.Get(self._track.Animation.AnimationId, MarkerTranslator.ToEventName(markerName))
+end
+
+-- Real seconds from now until the playhead reaches a point in the animation, at the speed it is playing at. Nil when it
+-- isn't moving towards it (stopped, paused, or already past).
+function AnimationHandle:GetTimeUntil(animationTime: number): number?
+	local track = self._track
+	local speed = track.Speed
+	if not track.IsPlaying or speed <= 0 then
+		return nil
+	end
+
+	local remaining = animationTime - track.TimePosition
+	if remaining < 0 then
+		return nil
+	end
+
+	return remaining / speed
+end
+
+-- Real seconds from now until the marker is reached. Nil if its time isn't known or it won't be reached.
+function AnimationHandle:GetTimeUntilMarker(markerName: string): number?
+	local markerTime = self:GetMarkerTime(markerName)
+	if not markerTime then
+		return nil
+	end
+
+	return self:GetTimeUntil(markerTime)
+end
+
+-- Real seconds from now until the animation reaches its end at the speed it is playing at, nil when it won't
+function AnimationHandle:GetTimeRemaining(): number?
+	return self:GetTimeUntil(self._track.Length)
 end
 
 function AnimationHandle:GetMarkerReachedSignal(markerName: string)

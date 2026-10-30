@@ -50,7 +50,7 @@ function Configuration.new(Base, character: Model)
 		{ character }
 	) or {}
 
-	print("Configuration data loaded:", self.Data)
+	-- print("Configuration data loaded:", self.Data)
 
 	return self
 end
@@ -110,6 +110,10 @@ end
 
 function Configuration:GetDamageSetting(settingName: string): any
 	return self:Get({ "Damage", settingName })
+end
+
+function Configuration:GetHealthSetting(settingName: string): any
+	return self:Get({ "Health", settingName })
 end
 
 function Configuration:GetThoughtSetting(settingName: string): any

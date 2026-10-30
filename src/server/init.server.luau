@@ -10,10 +10,10 @@ type Response = TypeRequests.APIResponse
 --bootstrap
 Core.init()
 
-task.wait(1)
-
+-- register manually
 for _, Character1 in ipairs(workspace:GetChildren()) do
 	if string.find(Character1.Name, "modnpc") then
 		API.startCharacter(Character1)
 	end
 end
+

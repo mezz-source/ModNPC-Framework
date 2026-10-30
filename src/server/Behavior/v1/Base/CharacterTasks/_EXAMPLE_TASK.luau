@@ -14,7 +14,7 @@ function ExampleTask.new(base, duration: number?)
 	local task, errorMessage = Task.new(base, {
 		Category = CategoryEnum.Movement,
 		Resources = { ResourceEnum.Movement },
-		Dependencies = { Dependencies.Humanoid, Dependencies.Dialogue },
+		Dependencies = { Dependencies.Configuration, Dependencies.Functions },
 		Policy = TypeTask.Policy.Parallel,
 	})
 

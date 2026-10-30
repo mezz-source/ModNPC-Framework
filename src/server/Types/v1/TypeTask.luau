@@ -7,7 +7,13 @@ export type Policy = "Exclusive" | "Replace" | "Parallel"
 TypeTask.CategoriesEnum = table.freeze({
 	Targetting = "Targetting",
 	Movement = "Movement",
-	Attack = "Attack"
+	Attack = "Attack",
+	-- Holds the spacing to the target once we are close enough to it (ChaseTargets takes us there)
+	Engage = "Engage",
+	-- Guarding with the arms, absorbing the hits that come in until it ends or breaks
+	Block = "Block",
+	-- Staggered, the character has no control of itself until it ends
+	Stagger = "Stagger",
 })
 
 -- These are abstract resources a task need to operate
@@ -23,13 +29,17 @@ TypeTask.ResourcesEnum = table.freeze({
 
 -- These are various base modules a task might need to function
 -- CharacterAPI implicitly exists and does not need to be declared
+-- Tasks reach behavior modules (Movement, TargetSelector, Sound, Animation, ...) through Functions, so declare
+-- Functions rather than the module itself.
 TypeTask.Dependencies = table.freeze({
 	Configuration = "Configuration",
 	Dialogue = "Dialogue",
+	Distance = "Distance",
 	Humanoid = "Humanoid",
 	Movement = "Movement",
 	ThoughtProcess = "ThoughtProcess",
 	Assets = "Assets",
+	CharacterTasks = "CharacterTasks",
 	Events = "Events",
 	Functions = "Functions",
 	Router = "Router",

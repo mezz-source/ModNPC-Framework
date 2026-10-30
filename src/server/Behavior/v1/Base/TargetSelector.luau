@@ -6,42 +6,43 @@ local Preferences = TypeTargetting.Preferences
 type TargettingContext = TypeTargetting.TargettingContext
 
 -- Each preference reads one number off a target, and says whether the lowest or highest wins.
+-- A measure is given the selector, which holds the CharacterAPI and Distance to read from.
 -- Measured fresh on every selection: distance depends on where we are, health changes over time.
 local Measures: { [string]: { PreferLowest: boolean, Measure: (any, TargettingContext) -> number? } } = {
 	[Preferences.ShortestDistance] = {
 		PreferLowest = true,
-		Measure = function(api, target)
-			return api:GetDistanceTo(target.Character)
+		Measure = function(selector, target)
+			return selector.Distance:GetDistanceTo(target.Character)
 		end,
 	},
 	[Preferences.LongestDistance] = {
 		PreferLowest = false,
-		Measure = function(api, target)
-			return api:GetDistanceTo(target.Character)
+		Measure = function(selector, target)
+			return selector.Distance:GetDistanceTo(target.Character)
 		end,
 	},
 	[Preferences.HighestHealth] = {
 		PreferLowest = false,
-		Measure = function(api, target)
-			return api:GetHealth(target.Character)
+		Measure = function(selector, target)
+			return selector.CharacterAPI:GetHealth(target.Character)
 		end,
 	},
 	[Preferences.LowestHealth] = {
 		PreferLowest = true,
-		Measure = function(api, target)
-			return api:GetHealth(target.Character)
+		Measure = function(selector, target)
+			return selector.CharacterAPI:GetHealth(target.Character)
 		end,
 	},
 	[Preferences.HighestMaxHealth] = {
 		PreferLowest = false,
-		Measure = function(api, target)
-			return api:GetMaxHealth(target.Character)
+		Measure = function(selector, target)
+			return selector.CharacterAPI:GetMaxHealth(target.Character)
 		end,
 	},
 	[Preferences.LowestMaxHealth] = {
 		PreferLowest = true,
-		Measure = function(api, target)
-			return api:GetMaxHealth(target.Character)
+		Measure = function(selector, target)
+			return selector.CharacterAPI:GetMaxHealth(target.Character)
 		end,
 	},
 }
@@ -52,6 +53,7 @@ TargetSelector.__index = TargetSelector
 function TargetSelector.new(base)
 	local self = setmetatable({}, TargetSelector)
 	self.CharacterAPI = base.CharacterAPI
+	self.Distance = base.Distance
 	return self
 end
 
@@ -76,7 +78,7 @@ function TargetSelector:SelectBest(
 	local bestValue: number? = nil
 
 	for _, target in targets do
-		local value = measure.Measure(self.CharacterAPI, target)
+		local value = measure.Measure(self, target)
 		if value == nil then
 			continue
 		end

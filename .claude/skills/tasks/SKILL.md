@@ -44,7 +44,7 @@ function MyTask.new(base, ...)
 	local task, errorMessage = Task.new(base, {
 		Category = CategoryEnum.Movement,
 		Resources = { ResourceEnum.Movement },
-		Dependencies = { Dependencies.Humanoid, Dependencies.Movement },
+		Dependencies = { Dependencies.Configuration, Dependencies.Functions },
 		Policy = TypeTask.Policy.Replace,
 	})
 	if not task then
@@ -52,7 +52,7 @@ function MyTask.new(base, ...)
 	end
 
 	local self = setmetatable(task, MyTask)
-	self.Humanoid = base.Humanoid -- cache only what you declared
+	self.Functions = base.Functions -- cache only what you declared
 	return self
 end
 ```
@@ -67,8 +67,13 @@ with a nil index. Rules:
 
 - Use the `TypeTask.Dependencies` enum. Declared names must match actual
   access: if the code (including delayed/spawned callbacks) touches
-  `base.Movement`, `Movement` is listed; if nothing touches it, remove it.
-  Audit this whenever you edit a task.
+  `base.Configuration`, `Configuration` is listed; if nothing touches it, remove
+  it. Audit this whenever you edit a task.
+- Tasks never touch behavior modules (`base.Movement`, `base.TargetSelector`,
+  `base.Sound`, ...) directly. They declare `Dependencies.Functions` and call
+  `self.Functions:CallFunction(FunctionEnum.X, ...)`; see the `functions` skill.
+  Core handlers (`Configuration`, `Events`, `Scheduler`, `State`, `Assets`) and
+  `CharacterAPI` are fine to use directly.
 - `CharacterAPI` exists implicitly on every Base and is **not** declared.
 - Duplicates and empty names are errors.
 - Construction order matters. Dependencies are checked against `base` at

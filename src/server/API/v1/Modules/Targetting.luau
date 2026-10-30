@@ -1,17 +1,13 @@
 local ServerScriptService = game:GetService("ServerScriptService")
+local CharacterDiscovery = require(script.Parent.CharacterDiscovery)
 local CharacterUtility = require(script.Parent.CharacterUtility)
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
 local Targetting = {}
 
--- how long to wait for a newly added humanoid's character to pass validation
-local VALIDATION_TIMEOUT = 5
-local VALIDATION_INTERVAL = 0.1
-
+-- Every character CharacterDiscovery tracks, as a target
 local targets: { [Model]: TypeTargetting.TargettingContext } = {}
-local connections: { [Model]: { RBXScriptConnection } } = {}
-local pending: { [Model]: boolean } = {}
 
 local function response(
 	success: boolean,
@@ -29,67 +25,16 @@ local function response(
 	}
 end
 
-local function invalidateTarget(character: Model)
-	local characterConnections = connections[character]
-	if characterConnections then
-		for _, connection in characterConnections do
-			connection:Disconnect()
-		end
-	end
-
-	connections[character] = nil
-	targets[character] = nil
-end
-
-local function registerTarget(character: Model, humanoid: Humanoid)
-	-- We allow unloaded targets so that instanced ModNPCs don't get incorrectly marked as generics
-	-- due to the unload flag deeper in type checks
-	local allowUnloadedTargets = true
-	local characterType = CharacterUtility.getCharacterType(character, allowUnloadedTargets).Data
-	if not characterType then
-		return
-	end
-
+local function registerTarget(character: Model, characterType: string)
 	targets[character] = {
 		Character = character,
 		Type = characterType,
 		Team = CharacterUtility.getTeam(character).Data,
 	}
-
-	connections[character] = {
-		character.Destroying:Once(function()
-			invalidateTarget(character)
-		end),
-		humanoid.Died:Once(function()
-			invalidateTarget(character)
-		end),
-	}
 end
 
-local function considerHumanoid(humanoid: Humanoid)
-	local character = humanoid.Parent
-	if not character or not character:IsA("Model") or targets[character] or pending[character] then
-		return
-	end
-	pending[character] = true
-
-	task.spawn(function()
-		local deadline = os.clock() + VALIDATION_TIMEOUT
-		while humanoid.Parent == character and character:IsDescendantOf(workspace) do
-			if CharacterUtility.isValidCharacter(character).Data then
-				registerTarget(character, humanoid)
-				break
-			end
-
-			if humanoid.Health <= 0 or os.clock() >= deadline then
-				break
-			end
-
-			task.wait(VALIDATION_INTERVAL)
-		end
-
-		pending[character] = nil
-	end)
+local function invalidateTarget(character: Model)
+	targets[character] = nil
 end
 
 local function collect(predicate: (TypeTargetting.TargettingContext) -> boolean): { TypeTargetting.TargettingContext }
@@ -173,25 +118,28 @@ function Targetting.getDistance(from: Model, to: Model): TypeModuleResponse.Modu
 	)
 end
 
+-- Distance in studs from the root part of a character to a point in the world
+function Targetting.getDistanceToPosition(from: Model, position: Vector3): TypeModuleResponse.ModuleResponse
+	if typeof(position) ~= "Vector3" then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Position must be a Vector3")
+	end
+
+	local fromRoot = CharacterUtility._getRootPart(from)
+	if not fromRoot then
+		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Character does not have a root part")
+	end
+
+	return response(
+		true,
+		true,
+		TypeRequests.Enums.StatusCode.Success,
+		"Distance retrieved successfully",
+		(fromRoot.Position - position).Magnitude
+	)
+end
+
 function Targetting.init(_)
-	task.defer(function()
-		if not CharacterUtility._validationReady() then
-			print("Awaiting character utility validation readiness before initalizing")
-			repeat task.wait() until CharacterUtility._validationReady()
-		end
-
-		workspace.DescendantAdded:Connect(function(descendant)
-			if descendant:IsA("Humanoid") then
-				considerHumanoid(descendant)
-			end
-		end)
-
-		for _, descendant in workspace:GetDescendants() do
-			if descendant:IsA("Humanoid") then
-				considerHumanoid(descendant)
-			end
-		end
-	end)
+	CharacterDiscovery._observe(registerTarget, invalidateTarget)
 end
 
 return Targetting

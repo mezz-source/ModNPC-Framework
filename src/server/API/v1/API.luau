@@ -131,7 +131,21 @@ local function handleRequest(request: APIRequest): APIResponse
 	end
 end
 
-local function requestRecieved(request: APIRequest): APIResponse
+local function requestRecieved(request: APIRequest): APIResponse?
+	-- the caller is blocked on the bindable until we return, so defer the work and hand back nothing
+	if typeof(request) == "table" and request.NoResponse == true then
+		task.defer(function()
+			if not isReady then
+				yieldUntilReady()
+			end
+			local response = handleRequest(request)
+			if not response.Success then
+				warn("API request failed (no response requested):", response.Message)
+			end
+		end)
+		return nil
+	end
+
 	if not isReady then
 		yieldUntilReady()
 	end
@@ -144,12 +158,12 @@ function API.startCharacter(character: Model)
 	return Base.new(character)
 end
 
-function API._internalRequest(request: APIRequest): APIResponse
+function API._internalRequest(request: APIRequest): APIResponse?
 	return requestRecieved(request)
 end
 
 function API.init(coreModules: {})
-	RequestBind.OnInvoke = function(request: APIRequest): APIResponse
+	RequestBind.OnInvoke = function(request: APIRequest): APIResponse?
 		return requestRecieved(request)
 	end
 

@@ -7,14 +7,13 @@ local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.Ty
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
 local CharacterUtility = require(script.Parent.Parent.CharacterUtility)
+local ModFolder = require(script.Parent.ModFolder)
 
 type ConfigurationIndex = TypeCDN.ConfigurationIndex
 type ConfigurationValue = TypeCDN.ConfigurationValue
 type ModuleResponse = TypeModuleResponse.ModuleResponse
 
 local contentDeliveryNetwork
-local baseConfiguration: Folder?
-local baseConfigurationIndex: ConfigurationIndex?
 local configurationIndexes: { [Model]: ConfigurationIndex } = {}
 
 -- Per-character listeners for changes made outside of this module (e.g. a studio script editing a ValueBase).
@@ -29,8 +28,6 @@ type Watcher = {
 local watchers: { [Model]: Watcher } = {}
 
 local ConfigEvents = TypeCharacterEvents.Names.Configuration
-
-local ModAssets = ServerScriptService:WaitForChild("ModAssets")
 
 local function response(success: boolean, message: string, data: any?): ModuleResponse
 	return {
@@ -145,33 +142,6 @@ local function getValue(character: Model, path: { string }): (ConfigurationValue
 	return nil, fallbackStatus
 end
 
-local function validateSchemaFolder(configurationFolder: Folder, schemaFolder: Folder, path: string): (boolean, string)
-	for _, schemaChild in ipairs(schemaFolder:GetChildren()) do
-		local pathName = path .. "/" .. schemaChild.Name
-		local configurationChild = configurationFolder:FindFirstChild(schemaChild.Name)
-		if not configurationChild then
-			return false, "Missing configuration value: " .. pathName
-		end
-
-		if schemaChild:IsA("Folder") then
-			if not configurationChild:IsA("Folder") then
-				return false, "Expected configuration folder: " .. pathName
-			end
-
-			local valid, message = validateSchemaFolder(configurationChild, schemaChild, pathName)
-			if not valid then
-				return false, message
-			end
-		elseif schemaChild:IsA("ValueBase") then
-			if not configurationChild:IsA(schemaChild.ClassName) then
-				return false, "Invalid configuration value type: " .. pathName
-			end
-		end
-	end
-
-	return true, ""
-end
-
 local function getStartTasks(character: Model): (boolean, {string})
 	local configurationFolder = getConfigurationFolder(character)
 	if not configurationFolder then
@@ -197,6 +167,38 @@ local function getStartTasks(character: Model): (boolean, {string})
 	end
 
 	return true, startTasks
+end
+
+local function getDispositionValues(character: Model, dispositionName: string): ({ [string]: number }?, string)
+	local configurationFolder = getConfigurationFolder(character)
+	if not configurationFolder then
+		warn("Missing configuration folder")
+		return nil, "Missing config folder"
+	end
+
+	local Disposition = configurationFolder:FindFirstChild("Disposition")
+	if not Disposition then
+		warn("Disposition folder is missing")
+		return nil, "Missing Disposition folder"
+	end
+
+	local folderValue = Disposition:FindFirstChild(dispositionName)
+	if not folderValue then
+		warn("No disposition value called", dispositionName, "in config folder")
+		return nil, "Couldn't find disposition value for " .. dispositionName
+	end
+
+	local values: {[string]: number} = {}
+	for _, value in ipairs(folderValue:GetChildren()) do
+		if not value:IsA("NumberValue") then
+			warn(value.Name, "is not a number value inside the", folderValue.Name, "disposition folder")
+			continue
+		end
+
+		values[value.Name] = value.Value
+	end
+
+	return values, "Values found"
 end
 
 local function getRelativePath(folder: Folder, instance: Instance): { string }?
@@ -351,17 +353,12 @@ function ConfigurationNetwork.init(network)
 		return ConfigurationNetwork.getTeamSetting(character, "TeamName")
 	end)
 
-	local candidate = ModAssets:WaitForChild("_v1_BASE_CONFIG")
-	baseConfiguration = if candidate then candidate else nil
-	baseConfigurationIndex = if baseConfiguration then buildIndex(baseConfiguration) else nil
 end
 
+-- This module serves ModNPC characters, so its Config directory is held to the ModNPC schema.
+-- Other mod folder kinds validate their own Config directories through ModFolder.
 function ConfigurationNetwork.validateConfigurationFolder(configurationFolder: Folder): (boolean, string)
-	if not baseConfiguration then
-		return false, "ServerScriptService._v1_BASE_CONFIG is missing or invalid"
-	end
-
-	return validateSchemaFolder(configurationFolder, baseConfiguration, "Config")
+	return ModFolder.validateSchema(ModFolder.Kinds.ModNPC, configurationFolder)
 end
 
 function ConfigurationNetwork.getConfigurationIndex(character: Model): ModuleResponse
@@ -376,11 +373,12 @@ function ConfigurationNetwork.getConfigurationIndex(character: Model): ModuleRes
 end
 
 function ConfigurationNetwork.getConfigurationSchema(): ModuleResponse
-	if not baseConfigurationIndex then
+	local schema = ModFolder.getSchema(ModFolder.Kinds.ModNPC)
+	if not schema then
 		return response(false, "Base configuration schema not found")
 	end
 
-	return response(true, "Configuration schema retrieved", baseConfigurationIndex)
+	return response(true, "Configuration schema retrieved", buildIndex(schema :: Folder))
 end
 
 function ConfigurationNetwork.getSetting(character: Model, path: { string }): ModuleResponse
@@ -422,6 +420,15 @@ function ConfigurationNetwork.getStartTasks(character: Model, settingName: strin
 	end
 
 	return response(true, "Start tasks retrieved", taskResponse)
+end
+
+function ConfigurationNetwork.getDispositionValues(character: Model, dispositionName: string): ModuleResponse
+	local values, message = getDispositionValues(character, dispositionName)
+	if not values then
+		return response(false, message)
+	end
+
+	return response(true, "Retrieved disposition values", values)
 end
 
 function ConfigurationNetwork.getRange(character: Model, settingName: string): ModuleResponse
@@ -520,6 +527,10 @@ function ConfigurationNetwork.setRange(
 	value: TypeCDN.PrimitiveValue
 ): ModuleResponse
 	return ConfigurationNetwork.setSetting(character, { "Ranges", settingName }, value)
+end
+
+function ConfigurationNetwork.setDispositionValue(character: Model, dispositionName: string, dispositionWeight: string, dispositionValue: number): ModuleResponse
+	return ConfigurationNetwork.setSetting(character, {"Disposition", dispositionName, dispositionWeight}, dispositionValue)
 end
 
 function ConfigurationNetwork.invalidate(character: Model): ModuleResponse

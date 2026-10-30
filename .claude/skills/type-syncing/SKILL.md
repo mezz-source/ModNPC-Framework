@@ -37,8 +37,9 @@ agree.
 
 ## Rerouting and bridging
 
-`Functions` is the behavior router. Its main functions usually bind to a
-method on `Base.Movement`, `Base.Targetting`, or `Base.Attacks`; subscribers
+`Functions` is the behavior router, and the only sanctioned path between
+behavior modules (see the `functions` skill). Its main functions usually bind to a
+method on `Base.Movement`, `Base.TargetSelector`, `Base.Sound`, `Base.Targetting`, or `Base.Attacks`; subscribers
 run before, instead of, or after the main function according to their
 position. If a behavior should route to another module, add the bridge in
 `RegisterMainFunctions` (or `bindIfAvailable`) and add the callback signature

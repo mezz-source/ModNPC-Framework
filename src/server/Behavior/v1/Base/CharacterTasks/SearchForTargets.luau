@@ -4,7 +4,9 @@ local Task = require(script.Parent.Parent.Task)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
 local TypeTeams = require(ServerScriptService.ModNPCServer.Types.v1.TypeTeams)
+local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 
+local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local TargettingEvents = TypeCharacterEvents.Names.Targetting
 
 local CategoryEnum = TypeTask.CategoriesEnum
@@ -21,8 +23,13 @@ function SearchTask.new(base, _: number?)
 	local task, errorMessage = Task.new(base, {
 		Category = CategoryEnum.Targetting,
 		Resources = { ResourceEnum.Targetting },
-		Dependencies = { Dependencies.Configuration, Dependencies.Events, Dependencies.TargetSelector },
-		Policy = TypeTask.Policy.Replace,
+		Dependencies = {
+				Dependencies.Configuration,
+				Dependencies.Distance,
+				Dependencies.Events,
+				Dependencies.Functions,
+			},
+		Policy = TypeTask.Policy.Parallel,
 	})
 
 	if not task then
@@ -32,8 +39,9 @@ function SearchTask.new(base, _: number?)
 	local self = setmetatable(task, SearchTask)
 	self.CharacterAPI = base.CharacterAPI
 	self.Configuration = base.Configuration
+	self.Distance = base.Distance
 	self.Events = base.Events
-	self.TargetSelector = base.TargetSelector
+	self.Functions = base.Functions
 
 	-- Check how often we should look for targets
 	self.searchInterval = self.Configuration:GetThoughtSetting("TargettingInterval") :: number
@@ -64,8 +72,8 @@ end
 -- FocusedTargetChanged: target -> a different target, as { Previous, Current }.
 function SearchTask:UpdateFocusTarget()
 	local best: TypeTargetting.TargettingContext? = nil
-	if self.TargetSelector:IsValidPreference(self.targettingPreference) then
-		best = self.TargetSelector:SelectBest(self:GetTargets(), self.targettingPreference)
+	if self.Functions:CallFunction(FunctionEnum.IsValidTargetPreference, self.targettingPreference) then
+		best = self.Functions:CallFunction(FunctionEnum.SelectBestTarget, self:GetTargets(), self.targettingPreference)
 	end
 	
 	local previous = self.FocusTarget
@@ -88,24 +96,47 @@ function SearchTask:UpdateFocusTarget()
 	end
 end
 
--- Targets we are allowed to consider: everyone if neutral, otherwise only non-matching teams
+-- The farthest a target can be and still be considered (Ranges.Provoke), nil if unconfigured (no limit)
+function SearchTask:GetProvokeRange(): number?
+	local range = self.Configuration:GetRange("Provoke")
+	return if type(range) == "number" then range else nil
+end
+
+-- Targets we are allowed to consider: everyone if neutral, otherwise only non-matching teams,
+-- and only those within the provoke range. This runs every search, so a target that walks out of range
+-- drops out of our known targets (and our focus) instead of being chased forever.
 function SearchTask:GetViableTargets(): { TypeTargetting.TargettingContext }
+	local candidates
 	local team = self.CharacterAPI:GetTeam()
 	if team and team ~= NEUTRAL_TEAM then
-		return self.CharacterAPI:GetOpposingTargets()
+		candidates = self.CharacterAPI:GetOpposingTargets()
+	else
+		candidates = {}
+		for _, context in self.CharacterAPI:GetAllTargets() do
+			if context.Character ~= self.CharacterAPI.Character then
+				table.insert(candidates, context)
+			end
+		end
+	end
+
+	local provokeRange = self:GetProvokeRange()
+	if not provokeRange then
+		return candidates
 	end
 
 	local viable = {}
-	for _, context in self.CharacterAPI:GetAllTargets() do
-		if context.Character ~= self.CharacterAPI.Character then
+	for _, context in candidates do
+		if self.Distance:IsWithin(context.Character, provokeRange) then
 			table.insert(viable, context)
 		end
 	end
 	return viable
 end
 
--- Sync our known targets with the latest search, firing spotted/lost for the differences
+-- Sync our known targets with the latest search, firing spotted/lost for the differences.
+-- AllTargetsLost fires once the search leaves us with no targets after we had some.
 function SearchTask:UpdateTargets()
+	local hadTargets = next(self.Targets) ~= nil
 	local found: { [Model]: TypeTargetting.TargettingContext } = {}
 	for _, context in self:GetViableTargets() do
 		found[context.Character] = context
@@ -133,6 +164,10 @@ function SearchTask:UpdateTargets()
 	end
 
 	self:UpdateFocusTarget()
+
+	if hadTargets and next(self.Targets) == nil and self:IsRunning() then
+		self.Events:Dispatch(TargettingEvents.AllTargetsLost)
+	end
 end
 
 function SearchTask:GetTargets(): { TypeTargetting.TargettingContext }

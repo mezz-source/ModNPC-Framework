@@ -3,14 +3,46 @@ local Animation = {}
 Animation.__index = Animation
 local AnimationHandleModule = require(script.AnimationHandle)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
+local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
+local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local HumanoidEvents = TypeCharacterEvents.Names.Humanoid
 local AnimationEvents = TypeCharacterEvents.Names.Animation
+local ContentEvents = TypeCharacterEvents.Names.Content
 
 local TypeAnimation = require(game:GetService("ServerScriptService").ModNPCServer.Types.v1.TypeAnimation)
+local TypeCDN = require(game:GetService("ServerScriptService").ModNPCServer.Types.v1.TypeCDN)
+local TypeDamage = require(game:GetService("ServerScriptService").ModNPCServer.Types.v1.TypeDamage)
 type AnimationHandle = TypeAnimation.AnimationHandle
+
+local DAMAGE_CATEGORIES = TypeDamage.AnimationCategories
+
+-- Hit reactions sit above attacks (Action) and below death (Action4). Stagger and Launch are held states, so they sit
+-- above a plain flinch.
+local DAMAGE_REACTIONS: { { Category: string, Priority: Enum.AnimationPriority } } = {
+	{ Category = DAMAGE_CATEGORIES.Light, Priority = Enum.AnimationPriority.Action2 },
+	{ Category = DAMAGE_CATEGORIES.Medium, Priority = Enum.AnimationPriority.Action2 },
+	{ Category = DAMAGE_CATEGORIES.Heavy, Priority = Enum.AnimationPriority.Action2 },
+	{ Category = DAMAGE_CATEGORIES.StaggerBackwards, Priority = Enum.AnimationPriority.Action2 },
+	{ Category = DAMAGE_CATEGORIES.Stagger, Priority = Enum.AnimationPriority.Action3 },
+	{ Category = DAMAGE_CATEGORIES.Launch, Priority = Enum.AnimationPriority.Action3 },
+}
 
 local DEFAULT_FADE_TIME = 0.25
 local STUD_FACTOR = 0.8
+
+local STEP_MARKER = "Step"
+local MIN_FOOTSTEP_SPEED = 0.5
+local MAX_FOOTSTEP_SPEED = 1.4
+local DEFAULT_FOOTSTEP = "FOOTSTEP_PLASTIC"
+-- Floor materials that don't sound like plastic; anything not listed here uses DEFAULT_FOOTSTEP
+local FOOTSTEP_BY_MATERIAL: { [Enum.Material]: string } = {
+	[Enum.Material.Grass] = "FOOTSTEP_GRASS",
+	[Enum.Material.LeafyGrass] = "FOOTSTEP_GRASS",
+	[Enum.Material.Ground] = "FOOTSTEP_GRASS",
+	[Enum.Material.Metal] = "FOOTSTEP_METAL",
+	[Enum.Material.DiamondPlate] = "FOOTSTEP_METAL",
+	[Enum.Material.CorrodedMetal] = "FOOTSTEP_METAL",
+}
 
 function Animation.new(Base: {}, character: Model)
 	local self = setmetatable({}, Animation)
@@ -29,6 +61,10 @@ function Animation.new(Base: {}, character: Model)
 	end
 	self.loadedTracks = {}
 	self.handles = {}
+	-- Which content source each loaded track came from, for the tracks that came from one other than the NPC
+	self.trackSources = {}
+	-- Current speed relative to the configured WalkSpeed, used to scale footsteps (1 = at walk speed)
+	self.speedRatio = 1
 	self.EventSubscriptions = {
 		self.Base.Events:Subscribe(HumanoidEvents.Running, function(speed: number)
 			self:_running(speed)
@@ -47,6 +83,10 @@ function Animation.new(Base: {}, character: Model)
 		end),
 		self.Base.Events:Subscribe(HumanoidEvents.Jumped, function()
 			self:_jumped()
+		end),
+		-- Tracks loaded from a weapon must not outlive its equip
+		self.Base.Events:Subscribe(ContentEvents.SourceRemoved, function(payload: TypeCharacterEvents.ContentSourceRemoved)
+			self:_unloadSource(payload.Source)
 		end),
 	}
 
@@ -97,6 +137,7 @@ function Animation:_running(speed: number)
 		self:StopAnimation("Sprint", DEFAULT_FADE_TIME)
 		self:AdjustSpeed("Walk", speed / self.walkSpeedScale)
 	end
+	self.speedRatio = speed / self.walkSpeedScale
 end
 
 -- Falls under 0.1
@@ -123,7 +164,6 @@ function Animation:_loadBaseAnimations()
 	local JumpAnim = self.Base.Assets:GetAnimation("Core/Jump")
 	local WalkAnim = self.Base.Assets:GetAnimation("Core/Walk")
 	local SprintAnim = self.Base.Assets:GetAnimation("Core/Sprint")
-	local ClimbAnim = self.Base.Assets:GetAnimation("Core/Climb")
 
 	-- note; out of any of these, the idle animation will ALWAYS be playing
 	if IdleAnim then
@@ -139,25 +179,68 @@ function Animation:_loadBaseAnimations()
 	end
 
 	if WalkAnim then
-		self:LoadAnimation(WalkAnim, "Walk", Enum.AnimationPriority.Idle, true)
+		self:_listenForSteps(self:LoadAnimation(WalkAnim, "Walk", Enum.AnimationPriority.Idle, true))
 	end
 
 	if SprintAnim then
-		self:LoadAnimation(SprintAnim, "Sprint", Enum.AnimationPriority.Idle, true)
-	end
-
-	if ClimbAnim then
-		self:LoadAnimation(ClimbAnim, "Climb", Enum.AnimationPriority.Idle, true)
+		self:_listenForSteps(self:LoadAnimation(SprintAnim, "Sprint", Enum.AnimationPriority.Idle, true))
 	end
 
 	self:PlayAnimation("Idle")
+	self:_loadDamageAnimations()
 end
 
+-- Every animation of the damage categories is loaded under its own name (DamageLight1, StaggerLoop, ...); Damage picks
+-- which one to play. Only the NPC's own animations are loaded, a category it doesn't have is skipped.
+function Animation:_loadDamageAnimations()
+	for _, reaction in ipairs(DAMAGE_REACTIONS) do
+		local animations = self.Base.Assets:GetAnimationCategory(reaction.Category, self.Base.Assets.BaseSource)
+		if not animations then
+			continue
+		end
+
+		for _, animation in ipairs(animations) do
+			-- The held part of a stagger/launch is the only one that loops
+			local loop = string.find(animation.Name, "Loop$") ~= nil
+			self:LoadAnimation(animation, animation.Name, reaction.Priority, loop)
+		end
+	end
+end
+
+-- The handle's signals are destroyed with it, so there's nothing to disconnect on unload
+function Animation:_listenForSteps(handle: AnimationHandle?)
+	if not handle then
+		return
+	end
+
+	handle:GetMarkerReachedSignal(STEP_MARKER):Connect(function()
+		self:_footstep()
+	end)
+end
+
+function Animation:_footstep()
+	local floorMaterial = self.Humanoid.FloorMaterial
+	-- A step marker can still fire while walking off a ledge
+	if floorMaterial == Enum.Material.Air then
+		return
+	end
+
+	local footstep = FOOTSTEP_BY_MATERIAL[floorMaterial] or DEFAULT_FOOTSTEP
+	self.Base.Functions:CallFunction(
+		FunctionEnum.PlaySoundCategory,
+		footstep,
+		math.clamp(self.speedRatio, MIN_FOOTSTEP_SPEED, MAX_FOOTSTEP_SPEED)
+	)
+end
+
+-- source is the content source the animation came from (the second value of Assets:GetAnimation). A track loaded from
+-- a weapon is unloaded when the weapon is unequipped; tracks from the NPC itself stay.
 function Animation:LoadAnimation(
 	animationAsset: { AnimationId: string },
 	animationName: string,
 	priority: Enum.AnimationPriority?,
-	loop: boolean?
+	loop: boolean?,
+	source: TypeCDN.ContentSource?
 ): AnimationHandle?
 	local animationTrack = self.CharacterAPI:LoadAnimation(animationAsset, animationName, priority, loop)
 	if not animationTrack then
@@ -166,6 +249,7 @@ function Animation:LoadAnimation(
 	end
 
 	self.loadedTracks[animationName] = animationTrack
+	self.trackSources[animationName] = if source ~= self.Base.Assets.BaseSource then source else nil
 	local handle = AnimationHandleModule.new(animationTrack)
 	self.handles[animationName] = handle
 	return handle
@@ -258,6 +342,33 @@ function Animation:UnloadAllAnimations(fadeTime: number)
 		self.handles[animationName] = nil
 	end
 	self.loadedTracks = {}
+	self.trackSources = {}
+end
+
+-- Unloads the tracks that were loaded from one content source, instantly: a weapon that is gone cannot fade out
+function Animation:_unloadSource(source: TypeCDN.ContentSource)
+	local tracks = {}
+	for animationName, trackSource in pairs(self.trackSources) do
+		if trackSource == source then
+			tracks[animationName] = self.loadedTracks[animationName]
+		end
+	end
+
+	if next(tracks) == nil then
+		return
+	end
+
+	self.CharacterAPI:UnloadAllAnimations(tracks, 0)
+	for animationName in pairs(tracks) do
+		local handle = self.handles[animationName]
+		if handle then
+			handle:Destroy()
+			self.handles[animationName] = nil
+		end
+
+		self.loadedTracks[animationName] = nil
+		self.trackSources[animationName] = nil
+	end
 end
 
 function Animation:Destroy()
