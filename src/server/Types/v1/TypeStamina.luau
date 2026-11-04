@@ -56,6 +56,14 @@ TypeStamina.CostSettings = table.freeze({
 	[TypeStamina.Costs.BlockHeavy] = "BlockHeavyConsumption",
 })
 
+-- The costs priced by the equipped weapon instead of the character: the same setting names, in the Config/Stamina folder of
+-- the weapon's ModWeapon (a sword takes a hit for less than bare fists do). Without a weapon, or a price in it, they are free.
+TypeStamina.WeaponCosts = table.freeze({
+	[TypeStamina.Costs.BlockLight] = true,
+	[TypeStamina.Costs.BlockMedium] = true,
+	[TypeStamina.Costs.BlockHeavy] = true,
+})
+
 TypeStamina.Folder = "Stamina"
 
 -- The overhead bar the character's stamina is shown on

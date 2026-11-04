@@ -1,4 +1,3 @@
-local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
 
@@ -28,7 +27,7 @@ function Scheduler.new(base)
 		Destroyed = false,
 	}, Scheduler)
 
-	self.UpdateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+	self.UpdateConnection = base.Heartbeat:Connect(function(deltaTime)
 		self:_update(deltaTime)
 	end)
 
@@ -43,18 +42,83 @@ function Scheduler:_removeTerminatedTasks()
 	end
 end
 
-function Scheduler:_stopConflictingTasks(task)
-	if task.Policy == TypeTask.Policy.Exclusive then
-		for _, currentTask in ipairs(table.clone(self.Tasks)) do
-			currentTask:Stop("Replaced by exclusive task")
+local function matchesSelector(task, selector: TypeTask.StopSelector?): boolean
+	if not selector or (not selector.Categories and not selector.Resources) then
+		return true
+	end
+
+	if selector.Categories and table.find(selector.Categories, task.Category) then
+		return true
+	end
+
+	return selector.Resources ~= nil and resourcesOverlap(task.Resources, selector.Resources)
+end
+
+-- The one place tasks are closed in bulk. Essential tasks are left alone unless the caller passes CancelEssentials.
+-- `cancel` ends the tasks with their Cancel (a taken-over ending); otherwise with a plain Stop (an eviction).
+function Scheduler:_stopMatching(
+	selector: TypeTask.StopSelector?,
+	reason: string?,
+	options: TypeTask.StopOptions?,
+	cancel: boolean
+): number
+	local cancelEssentials = options ~= nil and options.CancelEssentials == true
+	local cancelData = if options then options.CancelData else nil
+
+	local stopped = 0
+	for _, task in ipairs(table.clone(self.Tasks)) do
+		-- a task can end another one while it ends (Terminated cleanup), so the list is not trusted to still be running
+		if not task:IsRunning() or (task.Essential and not cancelEssentials) or not matchesSelector(task, selector) then
+			continue
 		end
-	elseif task.Policy == TypeTask.Policy.Replace then
-		for _, currentTask in ipairs(table.clone(self.Tasks)) do
-			if resourcesOverlap(currentTask.Resources, task.Resources) then
-				currentTask:Stop("Replaced by resource-conflicting task")
-			end
+
+		local ended
+		if cancel and type(task.Cancel) == "function" then
+			ended = task:Cancel(reason, cancelData)
+		else
+			ended = task:Stop(reason)
+		end
+
+		if ended then
+			stopped += 1
 		end
 	end
+
+	self:_removeTerminatedTasks()
+	return stopped
+end
+
+-- Starting a task evicts what its policy says. Exclusive leaves the essential tasks running. Replace is a resource
+-- conflict, which two tasks can't both win, so it ends the essential holder as well.
+function Scheduler:_stopConflictingTasks(task)
+	if task.Policy == TypeTask.Policy.Exclusive then
+		self:_stopMatching(nil, "Replaced by exclusive task", nil, false)
+	elseif task.Policy == TypeTask.Policy.Replace then
+		self:_stopMatching(
+			{ Resources = task.Resources },
+			"Replaced by resource-conflicting task",
+			{ CancelEssentials = true },
+			false
+		)
+	end
+end
+
+-- Ends the running tasks the selector matches, with each task's Cancel. Returns how many ended.
+function Scheduler:StopTasks(selector: TypeTask.StopSelector?, reason: string?, options: TypeTask.StopOptions?): number
+	return self:_stopMatching(selector, reason, options, true)
+end
+
+function Scheduler:StopCategory(category: string, reason: string?, options: TypeTask.StopOptions?): number
+	return self:_stopMatching({ Categories = { category } }, reason, options, true)
+end
+
+-- Ends the tasks holding the resource
+function Scheduler:StopResource(resource: string, reason: string?, options: TypeTask.StopOptions?): number
+	return self:_stopMatching({ Resources = { resource } }, reason, options, true)
+end
+
+function Scheduler:StopAll(reason: string?, options: TypeTask.StopOptions?): number
+	return self:_stopMatching(nil, reason, options, true)
 end
 
 function Scheduler:Start(task)
@@ -151,9 +215,8 @@ function Scheduler:Destroy()
 		self.UpdateConnection = nil
 	end
 
-	for _, task in ipairs(table.clone(self.Tasks)) do
-		task:Stop("Scheduler destroyed")
-	end
+	-- The character is gone, so nothing is essential any more
+	self:_stopMatching(nil, "Scheduler destroyed", { CancelEssentials = true }, false)
 	table.clear(self.Tasks)
 	self.Base = nil
 end

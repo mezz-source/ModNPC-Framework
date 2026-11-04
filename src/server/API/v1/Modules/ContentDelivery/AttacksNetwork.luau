@@ -75,12 +75,23 @@ local function emptyOr(problem: (value: string) -> string?): (string) -> string?
 	end
 end
 
+local function betweenZeroAndOne(value: number): string?
+	-- written this way round so NaN fails too
+	if not (value >= 0 and value <= 1) then
+		return "must be between 0 and 1"
+	end
+
+	return nil
+end
+
 local ATTACK_FIELDS: { Field } = {
 	{ Name = "Type", ClassName = "StringValue", Problem = oneOf(TypeAttack.DataAttackTypes) },
 	{ Name = "Limbs", ClassName = "StringValue", Problem = oneOf(TypeAttack.Limbs) },
 	{ Name = "DesiredRange", ClassName = "IntValue", Problem = positive },
 	{ Name = "IsCombo", ClassName = "BoolValue" },
 	{ Name = "Debounce", ClassName = "NumberValue", Problem = notNegative },
+	-- Attacks made before it existed leave it out, and read as 0 (exhaustion may slow them as much as it likes)
+	{ Name = "MinEfficiency", ClassName = "NumberValue", Problem = betweenZeroAndOne, Default = 0 },
 	{ Name = "AllowMoving", ClassName = "BoolValue" },
 	{ Name = "AllowInterrupts", ClassName = "BoolValue" },
 	{ Name = "SwingSoundName", ClassName = "StringValue" },
@@ -202,6 +213,7 @@ local function readAttack(attackFolder: Folder): (AttackData?, string?)
 		DesiredRange = values.DesiredRange,
 		IsCombo = values.IsCombo,
 		Debounce = values.Debounce,
+		MinEfficiency = values.MinEfficiency,
 		AllowMoving = values.AllowMoving,
 		AllowInterrupts = values.AllowInterrupts,
 		SwingSoundName = values.SwingSoundName,

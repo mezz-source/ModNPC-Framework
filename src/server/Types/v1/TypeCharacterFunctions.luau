@@ -54,6 +54,7 @@ CharacterFunctions.FunctionEnum = table.freeze({
 	UnequipWeapon = "UnequipWeapon",
 	ArmWeapon = "ArmWeapon",
 	DisarmWeapon = "DisarmWeapon",
+	GetEquippedWeapon = "GetEquippedWeapon",
 	IsStaggered = "IsStaggered",
 	IsLaunched = "IsLaunched",
 	BeginStagger = "BeginStagger",

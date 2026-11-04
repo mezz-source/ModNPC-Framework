@@ -2,6 +2,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local CharacterAPI = require(script.CharacterAPI)
 local Router = require(script.Router)
 local Events = require(script.Events)
+local Heartbeat = require(script.Heartbeat)
 local State = require(script.State)
 local Configuration = require(script.Configuration)
 local Assets = require(script.Assets)
@@ -27,14 +28,22 @@ local StimulantBuilder = require(script.StimulantBuilder)
 local Scheduler = require(script.Scheduler)
 local TargetSelector = require(script.TargetSelector)
 local CharacterTasks = require(script.CharacterTasks)
+local Task = require(script.Task)
 local TypeBehavior = require(ServerScriptService.ModNPCServer.Types.v1.TypeBehavior)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
+local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
+local Permissions = TypePermissions.Names
 local Base = {}
 Base.__index = Base
 Base.FunctionEnum = Functions.FunctionEnum
 Base.SubscribeEnum = Functions.SubscribeEnum
 -- For tasks, modules and mod scripts to describe the stimulants they send (CharacterAPI:SendStimulant)
 Base.StimulantBuilder = StimulantBuilder
+-- For mod scripts to build their own tasks without requiring framework paths: the class to inherit from, and the
+-- Category / Resources / Dependencies / Policy enums it is configured with. Register them with Base:RegisterTask.
+Base.Task = Task
+Base.TaskEnums = TypeTask
 
 type FunctionName = TypeBehavior.FunctionName
 type SubscribePosition = TypeBehavior.SubscribePosition
@@ -67,6 +76,9 @@ function Base.new(character: Model)
 	-- we know its safe to initialize our character dependencies now
 	self.CharacterAPI:_init()
 	self.Events = Events.new(self)
+	-- The only frame connection of this character. Must exist before any module that updates every frame (the scheduler, the
+	-- thought process, stamina...), which listen here instead of to RunService.
+	self.Heartbeat = Heartbeat.new()
 	-- Must exist before any module that registers or sets a state
 	self.State = State.new(self)
 	self.Functions = Functions.new(self)
@@ -80,17 +92,25 @@ function Base.new(character: Model)
 	self.Damage = Damage.new(self, character)
 
 	self.Configuration = Configuration.new(self, character)
+	-- Permissions/CanThink off freezes the character: nothing is dropped, the frame updates (and with them the reaction ticks)
+	-- just don't come through until it is back on
+	self.Heartbeat:SetPaused(not self.Configuration:IsPermitted(Permissions.CanThink))
+	local thinkSubscription = self.Configuration:ObservePermission(Permissions.CanThink, function(isPermitted)
+		self.Heartbeat:SetPaused(not isPermitted)
+	end)
 	self.Assets = Assets.new(self, character)
 	self.Distance = Distance.new(self, character)
 	self.Skills = Skills.new(self, character)
 	-- (cast for the same reason as Abilities below)
 	self.Stamina = Stamina.new(self :: any, character)
 	-- Reads the raw humanoid above like Damage does, so it has to be built before self.Humanoid is replaced by its module
-	self.Disposition = Disposition.new(self, character)
-	self.Dialogue = Dialogue.new(self, character)
+	-- (cast for the same reason as Abilities below)
+	self.Disposition = Disposition.new(self :: any, character)
+	-- (cast for the same reason as Abilities below)
+	self.Dialogue = Dialogue.new(self :: any, character)
 	-- (cast for the same reason as Abilities below)
 	self.Sound = Sound.new(self :: any, character)
-	self.VFX = VFX.new(self, character)
+	self.VFX = VFX.new(self :: any, character)
 	self.Animation = Animation.new(self, character)
 	self.Humanoid = Humanoid.new(self, character)
 	self.Movement = Movement.new(self, character)
@@ -129,14 +149,15 @@ function Base.new(character: Model)
 	self.Weapons:Init()
 	self.Movement:InitDodges()
 
-	-- TODO; mod tasks integrate here as well
-	-- Once we've registered our valid tasks, then we look at this npc's start tasks and spawn them.
+	-- Once we've registered our valid tasks (the CharacterTasks folder, then whatever the mod scripts registered with
+	-- RegisterTask), we look at this npc's start tasks and spawn them. Both live in CharacterTasks, so a mod task is
+	-- named in StartTasks the same way a built-in one is.
 	-- Tasks must be constructed (with Base) before the scheduler can start them.
 	local startTasks = self.Configuration:GetStartTasks()
 	for _, taskName in ipairs(startTasks) do
 		local taskConstructor = self.CharacterTasks[taskName]
 		if not taskConstructor then
-			warn("Auto start fail: unknown task", taskName)
+			warn("Auto start fail: unknown task", taskName, "(not in CharacterTasks, and no mod script registered it)")
 			continue
 		end
 
@@ -153,10 +174,13 @@ function Base.new(character: Model)
 	end
 
 	self.Subscriptions = {
+		thinkSubscription,
 		self.Events:Subscribe(TypeCharacterEvents.Names.Humanoid.Died, function()
 			self.alive = false
 			self.Tasks:Destroy()
 			self.Configuration:Unwatch()
+			-- Last, so whatever the death cleanup above did could still count on its frame updates
+			self.Heartbeat:Destroy()
 		end)
 	}
 
@@ -171,6 +195,14 @@ end
 -- A stimulant sent from this character, described by chaining (To, WithPriority, Lasting...) and ended with Send or Emit
 function Base:NewStimulant(name: string)
 	return StimulantBuilder.new(name, self.CharacterAPI)
+end
+
+-- Makes taskClass constructible as base.CharacterTasks.<name> for this character, which is also what lets it be
+-- listed in the config's StartTasks. Meant for mod scripts, from their init (start tasks are spawned after every mod
+-- has run). taskClass is built like a CharacterTasks module: inherits Base.Task and has new(base, ...).
+-- Refuses names that are already taken, built-in or not.
+function Base:RegisterTask(name: string, taskClass): (boolean, string?)
+	return CharacterTasks.register(self.CharacterTasks, self, name, taskClass)
 end
 
 function Base:_registerModScripts()

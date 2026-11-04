@@ -1,6 +1,8 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local TypeAPIFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeAPIFunctions)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
+local TypeDamage = require(ServerScriptService.ModNPCServer.Types.v1.TypeDamage)
 
 local Configuration = {}
 Configuration.__index = Configuration
@@ -103,13 +105,50 @@ function Configuration:GetEntry(key: string | { string })
 	return findValue(self.Data, getPath(key))
 end
 
+-- The value of the setting at key, nil when there is no such setting. A false value is returned as false, not nil.
 function Configuration:Get(key: string | { string }): any
 	local entry = self:GetEntry(key)
-	return entry and entry.Value or nil
+	if type(entry) ~= "table" then
+		return nil
+	end
+
+	return entry.Value
+end
+
+-- Whether the permission of Config/Permissions allows its activity (see TypePermissions). Only an explicit false forbids
+-- it: a permission the folder doesn't have, or that isn't a bool, allows it.
+function Configuration:IsPermitted(permission: string): boolean
+	return TypePermissions.isPermitted(self:Get({ TypePermissions.Folder, permission }))
+end
+
+-- Calls callback(isPermitted, wasPermitted) whenever the permission changes, read the same way IsPermitted reads it
+function Configuration:ObservePermission(permission: string, callback: (boolean, boolean) -> ())
+	return self:Observe({ TypePermissions.Folder, permission }, function(value, previous)
+		callback(TypePermissions.isPermitted(value), TypePermissions.isPermitted(previous))
+	end)
+end
+
+-- Switches a permission on or off through the API. Returns whether it was set and, if it wasn't, why (an unknown
+-- permission, one the folder doesn't have). IsPermitted reads the new value straight away; observers hear of it when the
+-- update event comes back from the API, like any other change.
+function Configuration:SetPermission(permission: string, isPermitted: boolean): (boolean, string?)
+	local set, reason = self.CharacterAPI:SetPermission(permission, isPermitted)
+	if not set then
+		return false, reason
+	end
+
+	-- the event that announces it is a bindable away, so it is written here too; the event writes the same value again
+	self:_update({ Path = { TypePermissions.Folder, permission }, Type = "BoolValue", Value = isPermitted })
+	return true, nil
 end
 
 function Configuration:GetDamageSetting(settingName: string): any
 	return self:Get({ "Damage", settingName })
+end
+
+-- The intake multiplier of Config/Damage/IntakeMultipliers for a damage type, nil when the folder doesn't have it
+function Configuration:GetIntakeMultiplier(damageType: string): any
+	return self:Get({ "Damage", TypeDamage.IntakeMultipliersFolder, damageType })
 end
 
 function Configuration:GetHealthSetting(settingName: string): any

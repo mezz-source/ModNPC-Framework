@@ -1,6 +1,6 @@
 ---
 name: tasks
-description: Use when creating, modifying, or scheduling ModNPC runtime tasks (Task.luau, Scheduler.luau, CharacterTasks/*), including categories, resources, dependencies, policies, lifecycle, and starting tasks from Base. Use this whenever the user mentions tasks, the scheduler, CharacterTasks, TypeTask enums, or wants a new character behavior that runs over time (searching, chasing, attacking, wandering), even if they don't say "task".
+description: Use when creating, modifying, or scheduling ModNPC runtime tasks (Task.luau, Scheduler.luau, CharacterTasks/*), including categories, resources, dependencies, policies, lifecycle, and starting tasks from Base, the Essential flag, and closing/cancelling tasks in bulk (StopCategory/StopResource/StopAll, CancelEssentials). Use this whenever the user mentions tasks, essential tasks, cancelling or closing tasks, the scheduler, CharacterTasks, TypeTask enums, or wants a new character behavior that runs over time (searching, chasing, attacking, wandering), even if they don't say "task".
 ---
 
 # ModNPC tasks
@@ -54,6 +54,32 @@ function MyTask.new(base, ...)
 	local self = setmetatable(task, MyTask)
 	self.Functions = base.Functions -- cache only what you declared
 	return self
+end
+```
+
+## Tasks from mod scripts
+
+Mods can't add files to `CharacterTasks/`, so they register a class from their
+`init(base)` with `base:RegisterTask(name, taskClass)`. It goes through the same
+`CharacterTasks.register` as the folder modules, so the task becomes
+`base.CharacterTasks.<name>` and can be listed in the config's `StartTasks`.
+Mod init runs before Base spawns start tasks. `RegisterTask` returns
+`false, error` if the name is taken (built-in tasks can't be shadowed) or the class
+has no `new`. Mods build the class from `base.Task` (the base class) and
+`base.TaskEnums` (`TypeTask`), so they don't require framework paths:
+
+```luau
+function module.init(base)
+	local E = base.TaskEnums
+	local MyTask = setmetatable({}, base.Task)
+	MyTask.__index = MyTask
+	function MyTask.new(b, ...)
+		local t, e = base.Task.new(b, { Category = E.CategoriesEnum.Movement, Policy = E.Policy.Parallel })
+		if not t then return nil, e end
+		return setmetatable(t, MyTask)
+	end
+	-- Start / Update as usual
+	base:RegisterTask("MyTask", MyTask)
 end
 ```
 
@@ -115,6 +141,42 @@ one, and two `Parallel` tasks sharing a resource will both run. Choose
 `Replace` for anything that owns a resource (chasing, searching, attacking),
 `Parallel` for passive/observer tasks, and `Exclusive` sparingly (stunned,
 dying, cutscene-style states).
+
+## Essential tasks and closing tasks in bulk
+
+**`Essential`** is an optional boolean in the `Task.new` configuration (default `false`, exposed as `task.Essential`). Set
+it on a task that runs a part of the character's logic that must keep going: targetting and attacking
+(`SearchForTargets`, `ChaseTargets` and `AttackTargets` are essential). Use it whenever the user says a task is
+"essential", "important", "always running" or "shouldn't be cancelled by a mass stop".
+
+**Nothing outside the scheduler iterates the task list to close tasks.** Do not write
+`for _, t in Scheduler:GetTasks(...) do t:Stop(...) end`. Use the scheduler:
+
+```luau
+local scheduler = self.Base.Scheduler
+scheduler:StopCategory(CategoryEnum.Movement, "Dodge started")          -- one category
+scheduler:StopResource(ResourceEnum.Arms, "Stunned")                    -- everything holding a resource
+scheduler:StopTasks({ Categories = { A, B }, Resources = { R } }, "Why") -- arrays; a task matches either list
+scheduler:StopAll("Why")                                                -- every task
+-- all return how many ended
+```
+
+- Essential tasks are **skipped** by all of these. The only way to end them in bulk is
+  `{ CancelEssentials = true }` as the last argument, which is for taking the whole character down (death). The
+  scheduler's own `Destroy` passes it. A caller that raises it must be able to say why.
+- `{ CancelData = x }` is passed to each task's `Cancel(reason, data)` as the second argument (Block reads it as
+  `animationsGone`).
+- Bulk stops end tasks with `task:Cancel(reason, data)`, not `Stop`. `Task:Cancel` defaults to `Stop`; override it only when
+  being taken over needs a different ending than being stopped (Block skips its ending animation, Attack marks itself
+  cancelled).
+- Only running tasks are touched, and the list is iterated on a clone, so cleanups that end other tasks are safe.
+- Stopping **one known task** is still `Scheduler:Stop(task, reason)` or `task:Stop` (a task stopping its own sub-task, an
+  attack interrupt). The helpers are for "all of a category/resource", not for a single reference.
+- Policy evictions use the same filter with `Stop`: `Exclusive` leaves essential tasks running; `Replace` ends a
+  resource-conflicting task even if essential (two tasks can't hold one resource), so don't give an essential task a
+  resource a `Replace` task is likely to claim unless that handover is intended.
+- Queries (`GetTask`, `GetTasks`) are still how you ask "is something running?" or reach into a task (`Absorb`, `AdoptGuard`).
+  Closing is the scheduler's job.
 
 ## Extending the enums
 
@@ -180,5 +242,7 @@ constructs and starts by name.
 - Every `base.X` the task touches (except `CharacterAPI`) is in `Dependencies`,
   and nothing extra is listed.
 - Policy matches intent and the resources are accurate.
+- `Essential = true` only if the task must survive bulk stops; code that closes tasks of a category/resource goes through
+  `Scheduler:StopCategory` / `StopResource` / `StopTasks` / `StopAll`, never a hand-written loop.
 - `Update` guards on `IsRunning`; completion/stop paths are covered.
 - `TypeBehavior.CharacterTasks` includes the new task.

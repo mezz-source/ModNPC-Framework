@@ -1,6 +1,7 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStimulant)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 
 -- The stimulants this character has been told about and not yet dealt with. The API decides who hears a stimulant and
 -- delivers it over the CharacterStimulant bind (CharacterAPI hands it to ReceiveStimulant); nothing reacts as it arrives.
@@ -17,6 +18,7 @@ local HumanoidEvents = TypeCharacterEvents.Names.Humanoid
 local ThoughtEvents = TypeCharacterEvents.Names.Thought
 local StimulantEvents = TypeCharacterEvents.Names.Stimulant
 local PriorityRank = TypeStimulant.PriorityRank
+local Permissions = TypePermissions.Names
 
 -- Most stimulants a character keeps at once. Past it the least urgent one makes room.
 local MAX_QUEUED = 32
@@ -117,10 +119,14 @@ function Stimulants:_evictOne()
 	end
 end
 
--- Takes in a stimulant the API delivered. Returns whether it was queued: one that is malformed, already expired, or
--- arrives after death is not.
+-- Takes in a stimulant the API delivered. Returns whether it was queued: one that is malformed, already expired, arrives
+-- after death, or arrives while Permissions/CanPerceive is off is not.
 function Stimulants:Receive(stimulant: StimulantEvent): boolean
 	if not self.Base:IsAlive() or not isWellFormed(stimulant) then
+		return false
+	end
+
+	if not self.Base.Configuration:IsPermitted(Permissions.CanPerceive) then
 		return false
 	end
 

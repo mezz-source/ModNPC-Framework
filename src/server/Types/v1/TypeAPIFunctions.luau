@@ -102,7 +102,10 @@ TypeAPI.Functions = table.freeze({
 		GetThoughtSetting = "getThoughtSetting",
 		SetRange = "setRange",
 		SetThoughtSetting = "setThoughtSetting",
-		SetDispositionValue = "setDispositionValue"
+		SetDispositionValue = "setDispositionValue",
+		GetPermission = "getPermission",
+		GetPermissions = "getPermissions",
+		SetPermission = "setPermission",
 	},
 	Movement = {
 		MoveTo = "moveTo",

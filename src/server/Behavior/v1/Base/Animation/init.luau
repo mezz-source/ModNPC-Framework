@@ -157,7 +157,6 @@ function Animation:_landed()
 	self:StopAnimation("Jump", DEFAULT_FADE_TIME)
 end
 
--- TODO: config/asset loading
 function Animation:_loadBaseAnimations()
 	local IdleAnim = self.Base.Assets:GetAnimation("Core/Idle")
 	local FallAnim = self.Base.Assets:GetAnimation("Core/Fall")

@@ -14,6 +14,7 @@ export type ExhaustionState = "None" | "Exhausted"
 export type BlockState = "None" | "Blocking"
 export type BlockBreakState = "Inactive" | "Active"
 export type DefenseState = "None" | "Reacting"
+export type WeaponState = "None" | "Equipped"
 
 -- State registers nothing itself; each state is registered by the module that owns it (HealthStatus: Damage)
 TypeState.Keys = table.freeze({
@@ -28,6 +29,7 @@ TypeState.Keys = table.freeze({
 	BlockState = "BlockState",
 	BlockBreakState = "BlockBreakState",
 	DefenseState = "DefenseState",
+	WeaponState = "WeaponState",
 })
 
 TypeState.HealthStatusEnum = table.freeze({
@@ -98,6 +100,13 @@ TypeState.BlockBreakStateEnum = table.freeze({
 TypeState.DefenseStateEnum = table.freeze({
 	None = "None",
 	Reacting = "Reacting",
+})
+
+-- Registered by Weapons. Equipped for as long as a weapon is in hand, armed (drawn) or not. The weapon holds the block
+-- animations, so a character can't block without one (see Abilities.CanBlock).
+TypeState.WeaponStateEnum = table.freeze({
+	None = "None",
+	Equipped = "Equipped",
 })
 
 return TypeState

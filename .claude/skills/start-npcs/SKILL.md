@@ -5,9 +5,9 @@ description: Use when a playtest needs ModNPC characters running - registering/s
 
 # Starting ModNPCs for testing
 
-Nothing starts NPCs automatically. `src/server/init.server.luau` runs `Core.init()`
-and the auto-start loop over `workspace` is commented out on purpose. Leave it
-that way. To get a live character, a server Script has to call:
+Any NPCs named 'modnpc' in workspace at time of playtest will automatically be started. There are usually 1 or 2 NPCs you made see preinitialized. `src/server/init.server.luau` runs `Core.init()`
+and the auto-start loop over `workspace`.
+To get a live character, a server Script has to call:
 
 ```lua
 API.startCharacter(model)  -- returns the Base; errors if the model isn't a valid ModNPC
@@ -29,51 +29,82 @@ bars, tasks, AI). A model that fails validation throws
 The API module lives at `ServerScriptService.ModNPCServer.API.v1.API` (Rojo maps
 `src/server` to `ModNPCServer`).
 
+## The test NPC: `ServerStorage.CLAUDE_MODNPC`
+
+There is always a sample ModNPC at `ServerStorage.CLAUDE_MODNPC`, kept in the
+place for testing. It's a valid, unstarted ModNPC (it still has `_UNLOADED`).
+Use it as the default test character instead of whatever is in `workspace`:
+
+- **Clone it, never start or edit the original.** Clone into `workspace`, give
+  each clone a distinct name (`CLAUDE_MODNPC_A`, `CLAUDE_MODNPC_B`, ...), and
+  start the clones. Starting a clone changes it (removes `_UNLOADED`, adds bars
+  and so on), so the original has to stay pristine.
+- Clone as many as the test needs: one for a solo check, two for a fight.
+  `PivotTo` each clone so they don't stack on top of each other.
+- Cloning **inside the temp Script at play time** (the default below) means the
+  clones are thrown away when play stops. There's nothing to clean up except the
+  Script.
+- Per-test config tweaks go on the clone's config values, not the original's.
+  Clones made at play time are fresh copies, so change their values in the temp
+  Script before calling `startCharacter`, or live during play.
+- Models already in `workspace` (e.g. the user's own `modnpc`) are the user's.
+  Only start them if the user asks.
+
 ## Steps (Roblox Studio MCP)
 
 1. **Edit mode** (`get_studio_state`; stop play first if needed). Instances made
    during play are thrown away when play stops, and the Script has to exist
    before play starts.
-2. Make sure the models exist in `workspace`. If a fight needs a second NPC,
-   clone the existing one in Edit mode and give it a distinct name (e.g.
-   `modnpc TEMPTEST`). Any model you don't start stays an inert dummy, and attacks
-   on it take the plain-Humanoid damage path.
-3. Insert the starter Script with `execute_luau` (Edit datamodel). Name the
-   models you want explicitly:
+2. Check `ServerStorage.CLAUDE_MODNPC` exists (`execute_luau`, Edit datamodel).
+   If it's missing, tell the user rather than building a substitute.
+3. Insert the starter Script with `execute_luau` (Edit datamodel). It clones
+   the sample, places the clones, and starts them:
 
    ```lua
    local s = Instance.new("Script")
    s.Name = "_TEMP_StartNPCs"
    s.Source = [[
+   local ServerStorage = game:GetService("ServerStorage")
    local API = require(game:GetService("ServerScriptService"):WaitForChild("ModNPCServer"):WaitForChild("API"):WaitForChild("v1"):WaitForChild("API"))
 
-   local NAMES = { "modnpc" } -- models in workspace to start
+   local TEMPLATE = ServerStorage:WaitForChild("CLAUDE_MODNPC")
 
-   for _, name in NAMES do
-   	local model = workspace:WaitForChild(name, 10)
-   	if not model then
-   		warn("[StartNPCs] not found:", name)
-   		continue
-   	end
-   	local ok, err = pcall(API.startCharacter, model)
-   	if not ok then
-   		warn("[StartNPCs] failed:", name, err)
+   -- one entry per clone: name and where to put it
+   local SPAWNS = {
+   	{ name = "CLAUDE_MODNPC_A", cf = CFrame.new(0, 5, 0) },
+   	{ name = "CLAUDE_MODNPC_B", cf = CFrame.new(0, 5, 20) * CFrame.Angles(0, math.pi, 0) },
+   }
+
+   _G.T = _G.T or { Bases = {} }
+
+   for _, spawn in SPAWNS do
+   	local model = TEMPLATE:Clone()
+   	model.Name = spawn.name
+   	model:PivotTo(spawn.cf)
+   	model.Parent = workspace
+   	local ok, res = pcall(API.startCharacter, model)
+   	if ok then
+   		_G.T.Bases[spawn.name] = res
+   	else
+   		warn("[StartNPCs] failed:", spawn.name, res)
    	end
    end
    ]]
    s.Parent = game:GetService("ServerScriptService")
    ```
 
-   To start everything that looks like an NPC instead, loop over
-   `workspace:GetChildren()` and start each model whose name contains `modnpc`.
-   That's what the old boot loop did.
+   Drop the second `SPAWNS` entry for a solo test. To start a model that's
+   already in `workspace` (only when the user asks), call
+   `API.startCharacter(workspace:WaitForChild(name, 10))` instead of cloning.
 4. Start play (`start_stop_play`). Wait about 8s before measuring anything;
    startup Heartbeats hitch.
 5. Check it started. The console shows `Starting character: <name>` and no
    `[StartNPCs]` warnings. Also, `workspace.<name>._UNLOADED` should be gone
    (`execute_luau`, Server datamodel).
-6. **Clean up.** Stop play, then in Edit mode destroy `ServerScriptService._TEMP_StartNPCs`
-   and any cloned test models. Never leave the temp Script in the place.
+6. **Clean up.** Stop play, then in Edit mode destroy `ServerScriptService._TEMP_StartNPCs`.
+   Play-time clones are already gone. If you cloned anything in Edit mode,
+   destroy it too. Never leave the temp Script in the place, and never modify or
+   remove `ServerStorage.CLAUDE_MODNPC`.
 
 ## Notes
 

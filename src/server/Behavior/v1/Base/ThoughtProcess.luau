@@ -1,7 +1,6 @@
 local ThoughtProcess = {}
 ThoughtProcess.__index = ThoughtProcess
 
-local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
@@ -63,7 +62,7 @@ function ThoughtProcess:_died()
 end
 
 function ThoughtProcess:Init()
-	self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+	self.updateConnection = self.Base.Heartbeat:Connect(function(deltaTime)
 		self:Update(deltaTime)
 	end)
 end

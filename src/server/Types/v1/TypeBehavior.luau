@@ -92,6 +92,7 @@ export type FunctionCallbacks = {
 	UnequipWeapon: () -> (boolean, string?),
 	ArmWeapon: () -> (boolean, string?),
 	DisarmWeapon: () -> (boolean, string?),
+	GetEquippedWeapon: () -> Instance?,
 	IsStaggered: () -> boolean,
 	IsLaunched: () -> boolean,
 	BeginStagger: () -> (boolean, string?),
@@ -151,6 +152,12 @@ export type CharacterTasks = {
 	Walk: {
 		new: (direction: TypeMovement.MovementDirection, duration: number?) -> (TypeTask.Task?, string?),
 	},
+	WalkTo: {
+		new: (position: Vector3, timeout: number?) -> (TypeTask.Task?, string?),
+	},
+	Wander: {
+		new: TypeTask.TaskConstructor,
+	},
 	Attack: {
 		new: (context: TypeAttack.AttackContext) -> (TypeTask.Task?, string?),
 	},
@@ -206,6 +213,9 @@ export type Configuration = {
 	GetData: (self: Configuration) -> { [string]: any },
 	GetEntry: (self: Configuration, key: string | { string }) -> any,
 	Get: (self: Configuration, key: string | { string }) -> any,
+	IsPermitted: (self: Configuration, permission: string) -> boolean,
+	ObservePermission: (self: Configuration, permission: string, callback: (boolean, boolean) -> ()) -> any,
+	SetPermission: (self: Configuration, permission: string, isPermitted: boolean) -> (boolean, string?),
 	GetDamageSetting: (self: Configuration, settingName: string) -> any,
 	GetHealthSetting: (self: Configuration, settingName: string) -> any,
 	GetThoughtSetting: (self: Configuration, settingName: string) -> any,
@@ -276,12 +286,15 @@ export type CharacterAPI = {
 	EquipWeapon: (self: CharacterAPI, weapon: Instance) -> Motor6D?,
 	UnequipWeapon: (self: CharacterAPI, weapon: Instance) -> boolean,
 	DropWeapon: (self: CharacterAPI, weapon: Instance) -> boolean,
-	GetWeaponSetting: (self: CharacterAPI, weapon: Instance, path: { string }) -> any,
+	GetWeaponSetting: (self: CharacterAPI, weapon: Instance, path: { string }, optional: boolean?) -> any,
 	GetAssetsIndex: (self: CharacterAPI, container: Instance?) -> TypeCDN.AssetIndex?,
 	GetAttacksIndex: (self: CharacterAPI, container: Instance?) -> TypeAttack.AttackIndex?,
 	GetWeapons: (self: CharacterAPI) -> { Instance },
 	GetEquippedWeapon: (self: CharacterAPI) -> Instance?,
 	ValidateCharacter: (self: CharacterAPI) -> (boolean, string?),
+	GetPermission: (self: CharacterAPI, permission: string) -> boolean?,
+	GetPermissions: (self: CharacterAPI) -> { [string]: boolean }?,
+	SetPermission: (self: CharacterAPI, permission: string, isPermitted: boolean) -> (boolean, string?),
 	GetAllTargets: (self: CharacterAPI) -> { TypeTargetting.TargettingContext },
 	GetTargetsOfType: (self: CharacterAPI, characterType: string) -> { TypeTargetting.TargettingContext },
 	GetTeam: (self: CharacterAPI) -> string?,
@@ -309,6 +322,20 @@ export type Events = {
 	) -> any,
 	Unsubscribe: (self: Events, eventName: string, subscriptionOrCallback: any) -> boolean,
 	Dispatch: (self: Events, eventName: string, arguments: any?) -> boolean,
+}
+
+export type HeartbeatConnection = {
+	Disconnect: (self: HeartbeatConnection) -> (),
+}
+
+-- The character's one frame clock. Base owns the RunService connection, everything that updates every frame listens here.
+-- (The thought process's own pace is the Thought.ReactionUpdate event.)
+export type Heartbeat = {
+	Connect: (self: Heartbeat, callback: (deltaTime: number) -> ()) -> HeartbeatConnection,
+	-- Held back while Permissions/CanThink is off (Base does this, mods can too)
+	SetPaused: (self: Heartbeat, paused: boolean) -> (),
+	IsPaused: (self: Heartbeat) -> boolean,
+	Destroy: (self: Heartbeat) -> (),
 }
 
 export type State = {
@@ -655,6 +682,7 @@ export type Base = {
 	Character: Model,
 	Router: Router,
 	Events: Events,
+	Heartbeat: Heartbeat,
 	State: State,
 	CharacterAPI: CharacterAPI,
 	Configuration: Configuration,
@@ -679,6 +707,13 @@ export type Base = {
 	Tasks: TypeTask.Scheduler,
 	Scheduler: TypeTask.Scheduler,
 	CharacterTasks: CharacterTasks,
+	-- For mod scripts building their own tasks: the class to inherit from and the enums it is configured with
+	Task: {
+		new: (base: any, configuration: any) -> (TypeTask.Task?, string?),
+	},
+	TaskEnums: typeof(TypeTask),
+	-- Adds taskClass as CharacterTasks.<name> (so it can be a start task). Fails if the name is taken.
+	RegisterTask: (self: Base, name: string, taskClass: { new: (base: any, ...any) -> (TypeTask.Task?, string?) }) -> (boolean, string?),
 	Functions: FunctionSystem,
 	FunctionEnum: typeof(TypeCharacterFunctions.FunctionEnum),
 	-- Makes the stimulants CharacterAPI:SendStimulant / EmitStimulant send. NewStimulant is the usual way in, bound to

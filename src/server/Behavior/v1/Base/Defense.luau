@@ -10,6 +10,7 @@ local TypeSkills = require(ServerScriptService.ModNPCServer.Types.v1.TypeSkills)
 local TypeStamina = require(ServerScriptService.ModNPCServer.Types.v1.TypeStamina)
 local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
 local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStimulant)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 
 -- How the character meets the hits it sees coming. An attacker warns its target of each hit with an IncomingAttack
 -- stimulant that lasts until the hit lands; on the reaction tick that finds it queued we consume it and decide, once per hit:
@@ -38,6 +39,7 @@ local MovementEnum = TypeMovement.MovementEnum
 local CombatEvents = TypeCharacterEvents.Names.Combat
 local HumanoidEvents = TypeCharacterEvents.Names.Humanoid
 local StimulantEvents = TypeCharacterEvents.Names.Stimulant
+local Permissions = TypePermissions.Names
 local ThoughtEvents = TypeCharacterEvents.Names.Thought
 local INCOMING_ATTACK = TypeStimulant.Names.IncomingAttack
 local DEFENSE_STATE_KEY = TypeState.Keys.DefenseState
@@ -148,9 +150,15 @@ function Defense:_getSetting(settingName: string): number
 	return if type(value) == "number" and value == value then value else SETTING_DEFAULTS[settingName]
 end
 
--- Every hit we were warned of and have not decided on yet is decided on now, most urgent first
+-- Every hit we were warned of and have not decided on yet is decided on now, most urgent first. While
+-- Permissions/CanReactToAttacks is off nothing is decided: the warnings are left alone to run out (others, like the
+-- disposition, still perceive them) and the hits meet whatever the character is already doing.
 function Defense:_onPending(pending: { StimulantEvent })
 	if type(pending) ~= "table" then
+		return
+	end
+
+	if not self.Configuration:IsPermitted(Permissions.CanReactToAttacks) then
 		return
 	end
 

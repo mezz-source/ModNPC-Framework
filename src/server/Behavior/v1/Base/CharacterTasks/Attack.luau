@@ -43,8 +43,8 @@ local FADE_TIME = 0.1
 -- The target is warned of each hit with an IncomingAttack stimulant: the first as soon as the attack is paid for, each
 -- next one of a combo as the previous lands. It lasts until the hit's animation event (or the rest of the animation, while
 -- the event's time isn't known) and is retracted once the hit resolves or the attack is cut short.
--- An exhausted character attacks at the speed of its stamina efficiency (animation and debounce) and its hits do that share
--- of their damage.
+-- An exhausted character attacks at the speed of its stamina efficiency (animation and debounce), though never slower than
+-- the attack's MinEfficiency, and its hits do the efficiency's share of their damage.
 -- Replace on purpose: starting an attack cuts short whatever else is using the limbs it needs.
 local AttackTask = {}
 AttackTask.__index = AttackTask
@@ -225,9 +225,14 @@ function AttackTask:_getEfficiency(): number
 	return if type(efficiency) == "number" and efficiency > 0 then efficiency else 1
 end
 
--- The animation plays at the speed of the efficiency. Always set, even at 1: the track keeps the speed of its last swing.
+-- How fast the attack goes: the efficiency, but never below the attack's MinEfficiency
+function AttackTask:_getSpeed(): number
+	return math.max(self:_getEfficiency(), self.Context.Attack.MinEfficiency)
+end
+
+-- The animation plays at that speed. Always set, even at 1: the track keeps the speed of its last swing.
 function AttackTask:_applySpeed()
-	self.Handle:AdjustSpeed(self:_getEfficiency())
+	self.Handle:AdjustSpeed(self:_getSpeed())
 end
 
 -- Whether the attack lets itself be cut short: only while it is running, and only if its data allows interrupts
@@ -303,9 +308,7 @@ end
 
 -- Walking tasks end, and the character is held still until we let go (so nothing can walk it again meanwhile)
 function AttackTask:_holdStill()
-	for _, movementTask in ipairs(self.Scheduler:GetTasks(CategoryEnum.Movement)) do
-		movementTask:Stop("Attack does not allow moving")
-	end
+	self.Scheduler:StopCategory(CategoryEnum.Movement, "Attack does not allow moving")
 
 	self.Functions:CallFunction(FunctionEnum.LockMovement, self)
 	self.MovementHeld = true
@@ -460,7 +463,7 @@ function AttackTask:_cleanup()
 	-- slower as well.
 	if self.Finished then
 		if attack.Debounce > 0 then
-			task.delay(attack.Debounce / self:_getEfficiency(), function()
+			task.delay(attack.Debounce / self:_getSpeed(), function()
 				self:_releaseState()
 			end)
 		else

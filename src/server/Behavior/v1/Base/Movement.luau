@@ -5,9 +5,11 @@ local TypeMovement = require(ServerScriptService.ModNPCServer.Types.v1.TypeMovem
 local TypeStamina = require(ServerScriptService.ModNPCServer.Types.v1.TypeStamina)
 local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
 local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 local Movement = {}
 Movement.__index = Movement
 
+local Permissions = TypePermissions.Names
 local MovementEnum = TypeMovement.MovementEnum
 local MoveStateEnum = TypeState.MoveStateEnum
 local DodgeStateEnum = TypeState.DodgeStateEnum
@@ -25,7 +27,7 @@ local DODGE_IMPULSE = 130
 -- The dodge animations are the ones in the Dodges category of the NPC's Assets/Animations. There is none for Forward,
 -- a forward dodge is only the burst of movement.
 local DODGE_ANIMATION_CATEGORY = "Dodges"
-local DODGE_ANIMATION_PRIORITY = Enum.AnimationPriority.Action3
+local DODGE_ANIMATION_PRIORITY = Enum.AnimationPriority.Movement
 local DODGE_ANIMATION_FADE = 0.1
 local DODGE_ANIMATIONS: { [TypeMovement.MovementDirection]: string } = {
 	[MovementEnum.Left] = "DodgeLeft",
@@ -140,6 +142,11 @@ end
 function Movement:StartSprinting(): (boolean, string?)
 	if self.sprinting then
 		return true
+	end
+
+	-- Before the price is paid: a sprint that isn't allowed costs nothing
+	if not self.Base.Configuration:IsPermitted(Permissions.CanSprint) then
+		return false, TypePermissions.Folder .. "/" .. Permissions.CanSprint .. " is off"
 	end
 
 	local paid, declinedReason = self.Base.Functions:CallFunction(FunctionEnum.PurchaseStamina, SPRINT_COST, true)
@@ -296,7 +303,13 @@ function Movement:ClearWalkDirection(source: any)
 	self:_applyWalk(true)
 end
 
+-- Turns the character to keep facing target. Does nothing while Permissions/CanFaceTarget is off (letting go of a target,
+-- RemoveFocusTarget, is always allowed).
 function Movement:SetFocusTarget(target: Instance)
+	if not self.Base.Configuration:IsPermitted(Permissions.CanFaceTarget) then
+		return
+	end
+
 	self:_lockRotation()
 	return self.CharacterAPI:SetFocusTarget(target)
 end
@@ -387,9 +400,7 @@ function Movement:Dodge(direction: TypeMovement.MovementDirection): (boolean, st
 	end
 
 	-- The dodge takes over: a held walk or chase would otherwise keep steering the character during it
-	for _, task in self.Base.Scheduler:GetTasks(TypeTask.CategoriesEnum.Movement) do
-		self.Base.Scheduler:Stop(task, "Dodge started")
-	end
+	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Movement, "Dodge started")
 
 	self.Base.State:Set(DODGE_STATE_KEY, DodgeStateEnum.Active)
 	self.CharacterAPI:ApplyImpulseInDirection(direction, DODGE_IMPULSE)

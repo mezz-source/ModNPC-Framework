@@ -576,7 +576,8 @@ function Disposition:Update(deltaTime: number)
 		self.Values[axis] = current + (self:_getTarget(axis, signals) - current) * ease
 	end
 
-	self:_updateDebugBars()
+	-- disabled for now
+	-- self:_updateDebugBars()
 end
 
 -- DEBUG: shows each axis' current value as the fill of its own bar. The bars are made on the first tick, as the API is not

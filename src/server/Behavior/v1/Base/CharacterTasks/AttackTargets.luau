@@ -51,6 +51,7 @@ function AttackTargetsTask.new(base, _: number?)
 			Dependencies.Scheduler,
 		},
 		Policy = TypeTask.Policy.Parallel,
+		Essential = true,
 	})
 
 	if not task then

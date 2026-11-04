@@ -5,6 +5,7 @@ local InstanceSearch = require(ServerScriptService.ModNPCServer.Util.InstanceSea
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
 local CharacterUtility = require(script.Parent.Parent.CharacterUtility)
 local ModFolder = require(script.Parent.ModFolder)
@@ -531,6 +532,60 @@ end
 
 function ConfigurationNetwork.setDispositionValue(character: Model, dispositionName: string, dispositionWeight: string, dispositionValue: number): ModuleResponse
 	return ConfigurationNetwork.setSetting(character, {"Disposition", dispositionName, dispositionWeight}, dispositionValue)
+end
+
+-- Permissions: the bools of Config/Permissions (see TypePermissions). Only an explicit false forbids, a permission the
+-- folder doesn't have allows its activity. Only the known permissions are served, so a typo is an error, not a new switch.
+
+local function getPermissionValue(character: Model, permission: string): (boolean?, string?)
+	if not TypePermissions.isPermission(permission) then
+		return nil, "Unknown permission " .. tostring(permission)
+	end
+
+	if not getConfigurationFolder(character) then
+		return nil, "Configuration folder not found"
+	end
+
+	local value = getValue(character, { TypePermissions.Folder, permission })
+	return TypePermissions.isPermitted(if value then value.Value else nil), nil
+end
+
+-- Data is whether the permission allows its activity
+function ConfigurationNetwork.getPermission(character: Model, permission: string): ModuleResponse
+	local isPermitted, errorMessage = getPermissionValue(character, permission)
+	if isPermitted == nil then
+		return response(false, errorMessage or "Permission could not be read")
+	end
+
+	return response(true, "Permission retrieved", isPermitted)
+end
+
+-- Data is every permission, by name, and whether it allows its activity
+function ConfigurationNetwork.getPermissions(character: Model): ModuleResponse
+	local permissions = {}
+	for _, permission in TypePermissions.Names do
+		local isPermitted, errorMessage = getPermissionValue(character, permission)
+		if isPermitted == nil then
+			return response(false, errorMessage or "Permissions could not be read")
+		end
+		permissions[permission] = isPermitted
+	end
+
+	return response(true, "Permissions retrieved", permissions)
+end
+
+-- Switches a permission on or off. It is a setting like any other, so the change reaches the character (and its
+-- observers) as a ConfigurationUpdated event. The permission's BoolValue has to exist in the folder: the schema requires it.
+function ConfigurationNetwork.setPermission(character: Model, permission: string, isPermitted: boolean): ModuleResponse
+	if not TypePermissions.isPermission(permission) then
+		return response(false, "Unknown permission " .. tostring(permission))
+	end
+
+	if type(isPermitted) ~= "boolean" then
+		return response(false, "Permission " .. permission .. " can only be set to true or false")
+	end
+
+	return ConfigurationNetwork.setSetting(character, { TypePermissions.Folder, permission }, isPermitted)
 end
 
 function ConfigurationNetwork.invalidate(character: Model): ModuleResponse

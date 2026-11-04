@@ -2,9 +2,9 @@ local TypeDamage = {}
 
 export type RecieveType = "Hit" | "Blocked" | "Dodged" | "Nullified"
 
--- What kind of damage a hit does, for the receiver to react to (resist, ...). Generic is damage we know nothing about
+-- What kind of damage a hit does, for the receiver to react to (resist, ...). General is damage we know nothing about
 -- (a legacy script took health off the humanoid behind our back).
-export type DamageType = "Blunt" | "Generic"
+export type DamageType = "Blunt" | "Sharp" | "Bullet" | "Laser" | "Fire" | "Special" | "General"
 
 -- An extended effect a hit can carry on top of its damage. The receiver decides the details (how long a stagger lasts)
 -- and only applies it if the hit lands.
@@ -25,7 +25,7 @@ export type IncomingDamageContext = {
 
 -- What the character's Damage module processes. Registered damage still has to be applied to the humanoid;
 -- unregistered damage (humanoid changed behind our back) already has been. Unregistered damage is normally reverted and
--- received again as registered Generic damage, so only damage that killed the character stays unregistered.
+-- received again as registered General damage, so only damage that killed the character stays unregistered.
 export type ReceivedDamageContext = {
 	Attacker: Model?,
 	Receiver: Model,
@@ -57,8 +57,24 @@ export type OutgoingDamageContext = {
 
 TypeDamage.DamageTypes = table.freeze({
 	Blunt = "Blunt",
-	Generic = "Generic",
+	Sharp = "Sharp",
+	Bullet = "Bullet",
+	Laser = "Laser",
+	Fire = "Fire",
+	Special = "Special",
+	General = "General",
 })
+
+-- The folder of Config/Damage holding the character's intake multiplier per damage type (a NumberValue named after the
+-- type). Every entry is optional: a type the folder doesn't have, or a missing folder, takes its damage as it is (1).
+TypeDamage.IntakeMultipliersFolder = "IntakeMultipliers"
+
+-- The Config/Damage folder (of a character, or of a weapon's ModWeapon)
+TypeDamage.Folder = "Damage"
+
+-- The folder of a weapon's Config/Damage holding, per damage type (a NumberValue named after the type), the share of a hit
+-- that still gets through when the weapon guards against it. Every entry is optional: a missing one lets nothing through (0).
+TypeDamage.BlockMultipliersFolder = "BlockMultipliers"
 
 -- The settings of a character's Config/Damage folder that Damage reads. A setting the folder doesn't have falls back to
 -- the default in Damage.
@@ -81,6 +97,7 @@ TypeDamage.Settings = table.freeze({
 
 -- The individual sound played when Vitality resists a special
 TypeDamage.ResistSound = "Resist"
+-- The individual sounds of a blocked hit and a broken guard. Weapon assets: looked up in the equipped weapon's source.
 TypeDamage.BlockSound = "Blocked"
 TypeDamage.BlockBreakSound = "BlockBreak"
 -- The individual VFX a character emits on itself when its guard is broken

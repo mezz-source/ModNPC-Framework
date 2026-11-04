@@ -1,11 +1,13 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 
 local Abilities = {}
 Abilities.__index = Abilities
 
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
+local Permissions = TypePermissions.Names
 local Keys = TypeState.Keys
 local HealthStatusEnum = TypeState.HealthStatusEnum
 local AirStateEnum = TypeState.AirStateEnum
@@ -14,12 +16,15 @@ local StaggerStateEnum = TypeState.StaggerStateEnum
 local BlockStateEnum = TypeState.BlockStateEnum
 local DefenseStateEnum = TypeState.DefenseStateEnum
 local BlockBreakStateEnum = TypeState.BlockBreakStateEnum
+local WeaponStateEnum = TypeState.WeaponStateEnum
 
 -- A rule is a list of conditions on states, all of which have to hold:
---   Require   the state has to be one of these values
---   Forbid    the state must not be any of these values
+--   Permission  the permission of Config/Permissions that has to allow the activity (see TypePermissions)
+--   Require     the state has to be one of these values
+--   Forbid      the state must not be any of these values
 -- A state that isn't registered on this character puts no condition on it (a mod's state may not exist everywhere).
 type Rule = {
+	Permission: string?,
 	Require: { [string]: { string } }?,
 	Forbid: { [string]: { string } }?,
 }
@@ -45,26 +50,33 @@ local NOT_BLOCK_BROKEN = { [Keys.BlockBreakState] = { BlockBreakStateEnum.Active
 -- A character dealing with a hit it saw coming (a dodge timed to it, a guard raised for it) doesn't swing into it
 local NOT_REACTING = { [Keys.DefenseState] = { DefenseStateEnum.Reacting } }
 local GROUNDED = { [Keys.AirState] = { AirStateEnum.Grounded } }
+local HAS_WEAPON = { [Keys.WeaponState] = { WeaponStateEnum.Equipped } }
 
 -- The activities with a rule of their own. CanBeEvasive is built from these instead, see below.
 local RULES: { [string]: Rule } = {
 	-- Moving needs the ground under us, and a character that is staggered or launched is not in control of itself
 	[FunctionEnum.CanMove] = {
+		Permission = Permissions.CanMove,
 		Require = GROUNDED,
 		Forbid = merge(NOT_DEAD, NOT_STAGGERED),
 	},
 	-- Attacking is moving's rule, and one attack at a time (which includes its debounce). Not while defending against a hit
 	-- either: the swing would take the arms from a guard raised for it, or the dodge waiting for it.
 	[FunctionEnum.CanAttack] = {
+		Permission = Permissions.CanAttack,
 		Require = GROUNDED,
 		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING, NOT_REACTING),
 	},
 	-- A dodge can happen in the air, but not in the middle of an attack or while staggered
 	[FunctionEnum.CanDodge] = {
+		Permission = Permissions.CanDodge,
 		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING),
 	},
-	-- A block raises the arms, which an attack in progress is using, and one block at a time. Not with a broken guard either.
+	-- A block needs a weapon in hand (it holds the block animations, armed or not). It raises the arms, which an attack in
+	-- progress is using, and one block at a time. Not with a broken guard either.
 	[FunctionEnum.CanBlock] = {
+		Permission = Permissions.CanBlock,
+		Require = HAS_WEAPON,
 		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING, NOT_BLOCKING, NOT_BLOCK_BROKEN),
 	},
 }
@@ -79,6 +91,10 @@ end
 
 -- The first condition of `rule` that fails, as a short reason, or nil if all of them hold
 function Abilities:_findBlock(rule: Rule): string?
+	if rule.Permission and not self.Base.Configuration:IsPermitted(rule.Permission) then
+		return TypePermissions.Folder .. "/" .. rule.Permission .. " is off"
+	end
+
 	for key, allowed in rule.Require or {} do
 		local value = self.State:Get(key)
 		if value ~= nil and not table.find(allowed, value) then

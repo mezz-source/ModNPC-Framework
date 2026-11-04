@@ -52,6 +52,9 @@ export type AttackData = {
 	-- combos read every AttackN folder in order, everything else only ever reads Attack1
 	IsCombo: boolean,
 	Debounce: number,
+	-- The slowest this attack is allowed to be made, as a share of its normal speed (0-1). An exhausted character swings at
+	-- its stamina efficiency, but never below this: 0 lets exhaustion slow it as much as it likes, 0.7 keeps it at 70% or faster.
+	MinEfficiency: number,
 	AllowMoving: boolean,
 	AllowInterrupts: boolean,
 	-- sound to play once as the attack starts, a combo included. Empty to play nothing.

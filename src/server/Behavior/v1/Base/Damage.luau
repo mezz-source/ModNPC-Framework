@@ -8,10 +8,12 @@ local TypeMovement = require(ServerScriptService.ModNPCServer.Types.v1.TypeMovem
 local TypeStamina = require(ServerScriptService.ModNPCServer.Types.v1.TypeStamina)
 local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
 local TypeHighlights = require(ServerScriptService.ModNPCServer.Types.v1.TypeHighlights)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 
 local Damage = {}
 Damage.__index = Damage
 
+local Permissions = TypePermissions.Names
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local CombatEvents = TypeCharacterEvents.Names.Combat
 local StaminaEvents = TypeCharacterEvents.Names.Stamina
@@ -52,6 +54,13 @@ local SETTING_DEFAULTS: { [string]: number } = table.freeze({
 	[Settings.LaunchUpwardImpulse] = 70,
 	[Settings.LaunchBackwardImpulse] = 60,
 	[Settings.ResistedStaggerMultiplier] = 0.5,
+})
+
+-- The permission of Config/Permissions each special needs to take hold of the character
+local SPECIAL_PERMISSIONS: { [string]: string } = table.freeze({
+	[Specials.Stagger] = Permissions.CanBeStaggered,
+	[Specials.StaggerBackwards] = Permissions.CanBeStaggered,
+	[Specials.Launch] = Permissions.CanBeLaunched,
 })
 
 local REACTION_FADE_TIME = 0.1
@@ -178,6 +187,39 @@ function Damage:_getSetting(settingName: string): number
 	return numberOrDefault(if configuration then configuration:GetDamageSetting(settingName) else nil, settingName)
 end
 
+-- What a hit of this damage type is multiplied by, from Config/Damage/IntakeMultipliers. The folder doesn't have to hold
+-- every type (or exist at all): a type it doesn't have, or a value that isn't a usable number, takes its damage as it is.
+-- Damage without a type is damage we know nothing about, so it goes by the General multiplier.
+function Damage:_getIntakeMultiplier(damageType: string?): number
+	local configuration = self.Base.Configuration
+	if not configuration then
+		return 1
+	end
+
+	local multiplier = configuration:GetIntakeMultiplier(damageType or TypeDamage.DamageTypes.General)
+	if type(multiplier) ~= "number" or multiplier ~= multiplier then
+		return 1
+	end
+
+	return math.max(multiplier :: number, 0)
+end
+
+-- Whether a permission of Config/Permissions allows it. Allowed until Configuration exists, which is before any hit comes in.
+function Damage:_isPermitted(permission: string): boolean
+	local configuration = self.Base.Configuration
+	return configuration == nil or configuration:IsPermitted(permission)
+end
+
+-- The special a landed hit comes with, or nil when the permissions don't let it take hold of the character
+function Damage:_permittedSpecial(special: string?): string?
+	local permission = if special then SPECIAL_PERMISSIONS[special] else nil
+	if permission and not self:_isPermitted(permission) then
+		return nil
+	end
+
+	return special
+end
+
 -- A setting of Config/Health
 function Damage:_getHealthSetting(settingName: string): number
 	local configuration = self.Base.Configuration
@@ -201,7 +243,7 @@ function Damage:_healthStatusFor(health: number, maxHealth: number): string
 end
 
 -- Damage from something that never told us (a legacy script touching the humanoid). The health is already gone, so it is
--- given back and the damage is received again as registered Generic damage: it can be dodged, blocked and scaled like any
+-- given back and the damage is received again as registered General damage: it can be dodged, blocked and scaled like any
 -- other hit. Damage that killed the character can't be given back, so that is only received as it is.
 function Damage:ReceiveUnregistered(amount: number): TypeDamage.OutgoingDamageContext
 	if self:_restoreSelfHealth(amount) then
@@ -209,7 +251,7 @@ function Damage:ReceiveUnregistered(amount: number): TypeDamage.OutgoingDamageCo
 			Attacker = nil,
 			Receiver = self.Character,
 			Amount = amount,
-			DamageType = TypeDamage.DamageTypes.Generic,
+			DamageType = TypeDamage.DamageTypes.General,
 		})
 	end
 
@@ -248,18 +290,25 @@ function Damage:Receive(context: TypeDamage.ReceivedDamageContext): TypeDamage.O
 	-- hit sound and knockback take effect), it just does nothing to us; a dodged one didn't connect at all.
 	local landed = recieveType == TypeDamage.RecieveTypes.Hit
 	local didHit = landed or recieveType == TypeDamage.RecieveTypes.Blocked
-	local special = if landed then context.Special else nil
+	local special = if landed then self:_permittedSpecial(context.Special) else nil
 	local staggerDuration = if special == Specials.Stagger then self:_rollStaggerDuration(context.MaxStaggerTime) else nil
 	local amount = if landed then context.Amount else 0
-	-- A guard absorbs as much of the hit as the character's stamina efficiency: all of it when rested, and part of the damage
-	-- gets through when exhausted. Asked now, before the block pays for the hit, since that payment is what can leave the
-	-- character exhausted.
+	-- A guard absorbs what the weapon's block multiplier for the damage type doesn't let through, and of that only as much as
+	-- the character's stamina efficiency: rested it takes just the multiplier's share, exhausted more gets past it on top.
+	-- Asked now, before the block pays for the hit, since that payment is what can leave the character exhausted.
 	if absorbedByBlock then
-		amount = context.Amount * (1 - self:_getBlockEfficiency())
+		local absorbed = self:_getBlockEfficiency() * (1 - self:_getBlockMultiplier(context.DamageType))
+		amount = context.Amount * (1 - absorbed)
 	end
-	-- Unregistered damage was taken in full already, there is nothing left to scale
+	-- Unregistered damage was taken in full already, there is nothing left to scale. What got past the guard is scaled by
+	-- how well this character takes its damage type, then by how much damage it takes overall.
 	if context.Registered then
+		amount *= self:_getIntakeMultiplier(context.DamageType)
 		amount *= math.max(self:_getSetting(Settings.RecieveMultiplier), 0)
+		-- The hit still lands (and is announced), it just takes nothing
+		if not self:_isPermitted(Permissions.CanBeDamaged) then
+			amount = 0
+		end
 	end
 
 	-- The hit landed with its damage; now Vitality gets to soften what comes with it
@@ -312,6 +361,24 @@ function Damage:_getBlockEfficiency(): number
 	local efficiency: any = self.Base.Functions:CallFunction(FunctionEnum.GetStaminaEfficiency)
 
 	return if type(efficiency) == "number" and efficiency == efficiency then math.clamp(efficiency, 0, 1) else 1
+end
+
+-- The share (0-1) of a hit of this damage type that gets through a full guard, from the equipped weapon's
+-- Config/Damage/BlockMultipliers (fists guarding against a blade still feel it). A type the folder doesn't have, or no weapon,
+-- lets nothing through.
+function Damage:_getBlockMultiplier(damageType: string?): number
+	local weapon = self.Base.Functions:CallFunction(FunctionEnum.GetEquippedWeapon)
+	if not weapon then
+		return 0
+	end
+
+	local path = { TypeDamage.Folder, TypeDamage.BlockMultipliersFolder, damageType or TypeDamage.DamageTypes.General }
+	local multiplier = tonumber(self.CharacterAPI:GetWeaponSetting(weapon, path, true))
+	if not multiplier or multiplier ~= multiplier then
+		return 0
+	end
+
+	return math.clamp(multiplier, 0, 1)
 end
 
 -- Hands a hit the block took to the Block task, which pays for it and breaks if it can't. The hit is absorbed either way.
@@ -597,9 +664,7 @@ function Damage:_loseControl(state: string)
 
 	local functions = self.Base.Functions
 	functions:CallFunction(FunctionEnum.CancelCurrentAttack, true)
-	for _, movementTask in ipairs(self.Base.Scheduler:GetTasks(TypeTask.CategoriesEnum.Movement)) do
-		movementTask:Stop("Lost control")
-	end
+	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Movement, "Lost control")
 	functions:CallFunction(FunctionEnum.StopMoving)
 end
 
@@ -652,9 +717,7 @@ end
 -- Ends the stagger the character is in, whichever kind it is, so the state is free to be taken
 function Damage:_breakStagger()
 	-- a Stagger task puts its animations away and gives the state back as it ends
-	for _, staggerTask in ipairs(self.Base.Scheduler:GetTasks(TypeTask.CategoriesEnum.Stagger)) do
-		staggerTask:Stop("Stagger broken")
-	end
+	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Stagger, "Stagger broken")
 
 	-- a StaggerBackwards has no task, only its token and the animation it holds the character for
 	if self.backwardsToken then

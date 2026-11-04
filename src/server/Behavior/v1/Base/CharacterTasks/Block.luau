@@ -17,20 +17,6 @@ local FADE_TIME = 0.1
 -- Seconds the one who broke the guard is told it is open (BlockBroken), when the break animation can't say
 local BREAK_OPENING_FALLBACK = 0.5
 
--- How each block animation is loaded. The loop holds the guard up and sits under the rest, which play over it for a moment:
--- the start as the guard goes up, the end as it comes down, and the hit as it takes a blow. A break is the loudest of them.
-local ANIMATION_SETTINGS: { [string]: { Priority: Enum.AnimationPriority, Loop: boolean } } = {
-	[Animations.Loop] = { Priority = Enum.AnimationPriority.Action, Loop = true },
-	[Animations.Start] = { Priority = Enum.AnimationPriority.Action2, Loop = false },
-	[Animations.End] = { Priority = Enum.AnimationPriority.Action2, Loop = false },
-	[Animations.Hit] = { Priority = Enum.AnimationPriority.Action2, Loop = false },
-	[Animations.Break] = { Priority = Enum.AnimationPriority.Action3, Loop = false },
-}
-
--- The characters whose block animations are loaded already. Loading them again would put a second set of tracks next to
--- the first, so a character that blocks many times only loads them the first.
-local loadedFor: { [any]: boolean } = setmetatable({}, { __mode = "k" }) :: any
-
 -- A character guarding itself with its arms. While it lasts the character is Blocking (see Damage:BeginBlock), and every hit
 -- that comes in is absorbed: Damage tells us how heavy it was (Absorb), and we pay for it in stamina. A character that
 -- can't pay has its guard broken instead, which ends the block. The hit is absorbed either way.
@@ -39,6 +25,8 @@ local loadedFor: { [any]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 -- The block lasts until something stops it (a stop of the scheduler, a task that needs the arms, a break). Nothing here
 -- decides when to raise or lower the guard. A guard broken by someone's hit tells them (a BlockBroken stimulant) for as long
 -- as the break animation leaves the character open.
+-- The animations are the equipped weapon's: Weapons loads them (Animations/Blocks of the weapon) as it is equipped and they
+-- go when it does. Without them the guard just isn't shown.
 -- Replace on purpose: raising the guard takes the arms, which cuts short whatever else is using them.
 local BlockTask = {}
 BlockTask.__index = BlockTask
@@ -49,7 +37,6 @@ function BlockTask.new(base, _: number?)
 		Category = CategoryEnum.Block,
 		Resources = { ResourceEnum.Arms },
 		Dependencies = {
-			Dependencies.Assets,
 			Dependencies.Functions,
 		},
 		Policy = TypeTask.Policy.Replace,
@@ -60,7 +47,6 @@ function BlockTask.new(base, _: number?)
 	end
 
 	local self = setmetatable(task, BlockTask)
-	self.Assets = base.Assets
 	self.Functions = base.Functions
 
 	-- Whether we hold the block state, so one we never took is never given back
@@ -71,49 +57,28 @@ function BlockTask.new(base, _: number?)
 	self.BrokenBy = nil :: Model?
 	-- Set when something else took over (an attack): the guard just goes, without an ending of its own
 	self.Cancelled = false
+	-- Set when the weapon holding the block animations went: its tracks are unloaded already
+	self.AnimationsGone = false
 	-- Who raised the guard and so puts it down ("Defense" for a last moment guard, "Engage" once it holds it). Only a label
 	-- the two agree on; nothing here reads it.
 	self.Holder = nil :: string?
 
-	self:_loadAnimations()
-
 	return self
 end
 
--- Loads the block animations of the character's assets (Animations/Blocks), the first time it blocks. An animation the
--- character doesn't have is just not shown.
-function BlockTask:_loadAnimations()
-	if loadedFor[self.Base] then
-		return
-	end
-
-	local animations = self.Assets:GetAnimationCategory(TypeBlock.AnimationCategory, self.Assets.BaseSource)
-	if not animations then
-		return
-	end
-	loadedFor[self.Base] = true
-
-	for _, animation in ipairs(animations) do
-		local settings = ANIMATION_SETTINGS[animation.Name]
-		if settings then
-			self.Functions:CallFunction(
-				FunctionEnum.LoadAnimation,
-				animation,
-				animation.Name,
-				settings.Priority,
-				settings.Loop,
-				self.Assets.BaseSource
-			)
-		end
-	end
-end
-
+-- The block sounds are the equipped weapon's, like its animations: looked up in the weapon's source, loaded as it is
+-- equipped. Without a weapon there is nothing to play.
 function BlockTask:_playSound(soundName: string)
 	if soundName == "" then
 		return
 	end
 
-	self.Functions:CallFunction(FunctionEnum.PlaySound, soundName)
+	local weapon = self.Functions:CallFunction(FunctionEnum.GetEquippedWeapon)
+	if not weapon then
+		return
+	end
+
+	self.Functions:CallFunction(FunctionEnum.PlaySound, soundName, weapon)
 end
 
 function BlockTask:Start()
@@ -180,9 +145,11 @@ function BlockTask:Break(reason: string?): boolean
 end
 
 -- Ends the block because something else takes the character over. The guard is put away without an ending animation, as
--- whatever cancelled it (an attack) shows its own and the ending would play over it.
-function BlockTask:Cancel(reason: string?): boolean
+-- whatever cancelled it (an attack) shows its own and the ending would play over it. With `animationsGone` (the weapon that
+-- held them was unequipped) there are no tracks left to put away either.
+function BlockTask:Cancel(reason: string?, animationsGone: boolean?): boolean
 	self.Cancelled = true
+	self.AnimationsGone = animationsGone == true
 
 	return self:Stop(reason or "Block cancelled")
 end
@@ -197,8 +164,8 @@ function BlockTask:_cleanup()
 	-- and hits are still taken as blocked.
 	self.Functions:CallFunction(FunctionEnum.EndBlock)
 
-	-- A dead character has no tracks left to play or stop
-	if self.Base:IsAlive() then
+	-- A dead character has no tracks left to play or stop, and neither does one whose weapon went
+	if self.Base:IsAlive() and not self.AnimationsGone then
 		for _, animationName in ipairs({ Animations.Loop, Animations.Start, Animations.Hit }) do
 			self.Functions:CallFunction(FunctionEnum.StopAnimation, animationName, FADE_TIME)
 		end

@@ -381,9 +381,20 @@ function CharacterAPI:DropWeapon(weapon: Instance): boolean
 	return true
 end
 
--- A value out of the weapon's Config directory, e.g. { "WeaponSettings", "AlwaysArmed" }; nil when it is not there
-function CharacterAPI:GetWeaponSetting(weapon: Instance, path: { string }): any
-	return self:RequestAPIData(Modules.Weapon, Functions.Weapon.GetWeaponSetting, { weapon, path })
+-- A value out of the weapon's Config directory, e.g. { "WeaponSettings", "AlwaysArmed" }; nil when it is not there.
+-- An optional setting (one a weapon may leave out, read every hit) is nil without the failed request being warned about.
+function CharacterAPI:GetWeaponSetting(weapon: Instance, path: { string }, optional: boolean?): any
+	if not optional then
+		return self:RequestAPIData(Modules.Weapon, Functions.Weapon.GetWeaponSetting, { weapon, path })
+	end
+
+	local result = self.Base.Router:Request({
+		ModuleName = Modules.Weapon,
+		Function = Functions.Weapon.GetWeaponSetting,
+		Arguments = { weapon, path },
+	})
+
+	return if result.Success then result.Data else nil
 end
 
 -- Every valid mod weapon this character carries
@@ -413,6 +424,34 @@ function CharacterAPI:GetAttacksIndex(container: Instance?): TypeAttack.AttackIn
 		Functions.ContentDelivery.GetAttacksIndex,
 		{ container or self.Character }
 	)
+end
+
+-- Permissions (Config/Permissions, see TypePermissions)
+
+-- Whether the permission allows its activity, as the folder has it right now. Nil when it can't be read (an unknown
+-- permission, no config). Behavior code reads the cached Configuration:IsPermitted instead of asking every time.
+function CharacterAPI:GetPermission(permission: string): boolean?
+	return self:RequestAPIData(Modules.ContentDelivery, Functions.ContentDelivery.GetPermission, { self.Character, permission })
+end
+
+-- Every permission by name, and whether it allows its activity. Nil when they can't be read.
+function CharacterAPI:GetPermissions(): { [string]: boolean }?
+	return self:RequestAPIData(Modules.ContentDelivery, Functions.ContentDelivery.GetPermissions, { self.Character })
+end
+
+-- Switches a permission on or off. Returns whether it was set and, if it wasn't, why. Prefer
+-- Configuration:SetPermission, which also makes the change readable straight away.
+function CharacterAPI:SetPermission(permission: string, isPermitted: boolean): (boolean, string?)
+	local apiResponse = self:RequestAPI(
+		Modules.ContentDelivery,
+		Functions.ContentDelivery.SetPermission,
+		{ self.Character, permission, isPermitted }
+	)
+	if apiResponse and apiResponse.Success then
+		return true, nil
+	end
+
+	return false, if apiResponse then apiResponse.Message else "Permission request returned no response"
 end
 
 -- Validation

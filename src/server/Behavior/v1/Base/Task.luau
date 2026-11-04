@@ -74,6 +74,7 @@ function Task.new(base, configuration)
 		Dependencies = dependencies,
 		Category = category,
 		Policy = policy,
+		Essential = configuration.Essential == true,
 		Running = false,
 		Completed = false,
 		Terminated = Signal.new(),
@@ -106,6 +107,13 @@ function Task:Stop(reason: string?): boolean
 	self.Completed = true
 	self.Terminated:Fire(reason or "Stopped")
 	return true
+end
+
+-- Ends the task because something else takes the character over. This is what the scheduler's bulk stops call, so a task
+-- that has to end differently when it is taken over than when it is merely stopped (a guard that puts its ending animation
+-- away) overrides it. `data` is whatever the canceller passed along.
+function Task:Cancel(reason: string?, _data: any?): boolean
+	return self:Stop(reason or "Cancelled")
 end
 
 function Task:IsRunning(): boolean

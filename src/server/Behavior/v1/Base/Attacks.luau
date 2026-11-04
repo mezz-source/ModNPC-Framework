@@ -17,7 +17,7 @@ local AttackTypes = TypeAttack.AttackTypes
 
 -- An attack's animation is the one named like it in the Attacks category of the same source's Assets/Animations
 local ANIMATION_CATEGORY = "Attacks"
-local ANIMATION_PRIORITY = Enum.AnimationPriority.Action
+local ANIMATION_PRIORITY = Enum.AnimationPriority.Action3
 
 local ATTACK_STATE_KEY = TypeState.Keys.AttackState
 local AttackStateEnum = TypeState.AttackStateEnum
@@ -412,12 +412,7 @@ function Attacks:Attack(
 
 	-- An attack drops the guard, whichever limbs it uses (a kick doesn't need the arms, but a character is guarding or
 	-- attacking). So a guard never gets in the way of an attack request: it just ends, and the character is open.
-	for _, blockTask in ipairs(self.Base.Scheduler:GetTasks(TypeTask.CategoriesEnum.Block)) do
-		if blockTask:IsRunning() then
-			local guard: any = blockTask
-			guard:Cancel("Attacking")
-		end
-	end
+	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Block, "Attacking")
 
 	local started, startError = self.Base.Scheduler:Start(attackTask)
 	if not started then

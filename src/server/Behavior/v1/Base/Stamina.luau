@@ -6,8 +6,8 @@ local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStimulant)
 local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
-
-local RunService = game:GetService("RunService")
+local TypeBehavior = require(ServerScriptService.ModNPCServer.Types.v1.TypeBehavior)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 
 local Stamina = {}
 Stamina.__index = Stamina
@@ -20,6 +20,7 @@ local HumanoidEvents = TypeCharacterEvents.Names.Humanoid
 local StateKeys = TypeState.Keys
 local ExhaustionStateEnum = TypeState.ExhaustionStateEnum
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
+local Permissions = TypePermissions.Names
 
 -- What a setting of Config/Stamina is when the folder doesn't have it, or it isn't a usable number
 local DEFAULT_MAX = 100
@@ -96,7 +97,7 @@ function Stamina.new(Base: any, character: Model)
 	self.bar = nil :: TypeBars.Bar?
 	self.alive = true
 	-- Runs while there is something to drain or regenerate, and is off otherwise
-	self.updateConnection = nil :: RBXScriptConnection?
+	self.updateConnection = nil :: TypeBehavior.HeartbeatConnection?
 	self.sinceUpdate = 0
 
 	-- Owned here; State is built before the stamina, so it can be registered
@@ -129,6 +130,14 @@ function Stamina:Init()
 			end)
 		)
 	end
+
+	-- The loop only runs while there is work, so regeneration that is allowed again (or taken away) has to start (or stop) it
+	table.insert(
+		self.Subscriptions,
+		self.Configuration:ObservePermission(Permissions.CanRegenerateStamina, function()
+			self:_refresh()
+		end)
+	)
 
 	local events = self.Base.Events
 	table.insert(
@@ -257,9 +266,10 @@ function Stamina:_isSprinting(): boolean
 end
 
 -- Stamina comes back while the character is not swinging, not staggered (or launched) and not sprinting, and is alive. A
--- guard that is up does not stop it: a character can recover while it blocks.
+-- guard that is up does not stop it: a character can recover while it blocks. Never while Permissions/CanRegenerateStamina
+-- is off.
 function Stamina:CanRegenerate(): boolean
-	if not self.alive then
+	if not self.alive or not self.Configuration:IsPermitted(Permissions.CanRegenerateStamina) then
 		return false
 	end
 
@@ -302,7 +312,7 @@ function Stamina:_refresh()
 	local shouldRun = self:_hasWork()
 	if shouldRun and not self.updateConnection then
 		self.sinceUpdate = 0
-		self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+		self.updateConnection = self.Base.Heartbeat:Connect(function(deltaTime)
 			self:_onHeartbeat(deltaTime)
 		end)
 	elseif not shouldRun and self.updateConnection then
@@ -413,15 +423,24 @@ function Stamina:GetFraction(): number
 	return math.clamp(self.Current / self.Max, 0, 1)
 end
 
--- What the cost comes to for this character: its price in Config/Stamina times the ConsumptionMultiplier. A cost the
--- configuration has no price for is free. Nil for something that isn't a cost at all.
+-- What the cost comes to for this character: its price in Config/Stamina times the ConsumptionMultiplier. A weapon cost (see
+-- TypeStamina.WeaponCosts) is priced by the equipped weapon's Config/Stamina instead. A cost the configuration has no price
+-- for is free. Nil for something that isn't a cost at all.
 function Stamina:GetCost(cost: TypeStamina.Cost): number?
 	local settingName = CostSettings[cost]
 	if not settingName then
 		return nil
 	end
 
-	local price = self.Configuration:Get({ TypeStamina.Folder, settingName })
+	local price
+	if TypeStamina.WeaponCosts[cost] then
+		local weapon = self.Base.Functions:CallFunction(FunctionEnum.GetEquippedWeapon)
+		price = if weapon
+			then self.Base.CharacterAPI:GetWeaponSetting(weapon, { TypeStamina.Folder, settingName }, true)
+			else nil
+	else
+		price = self.Configuration:Get({ TypeStamina.Folder, settingName })
+	end
 	if not isAmount(price) then
 		price = 0
 	end

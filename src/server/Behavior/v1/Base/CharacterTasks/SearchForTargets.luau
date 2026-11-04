@@ -5,8 +5,10 @@ local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.Ty
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
 local TypeTeams = require(ServerScriptService.ModNPCServer.Types.v1.TypeTeams)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
+local Permissions = TypePermissions.Names
 local TargettingEvents = TypeCharacterEvents.Names.Targetting
 
 local CategoryEnum = TypeTask.CategoriesEnum
@@ -30,6 +32,7 @@ function SearchTask.new(base, _: number?)
 				Dependencies.Functions,
 			},
 		Policy = TypeTask.Policy.Parallel,
+		Essential = true,
 	})
 
 	if not task then
@@ -187,10 +190,17 @@ function SearchTask:OnReactionUpdate(deltaTime: number)
 
 	self.curInterval += deltaTime
 
-	if self.curInterval >= self.searchInterval then
-		self.curInterval = 0
-		self:UpdateTargets()
+	if self.curInterval < self.searchInterval then
+		return
 	end
+
+	-- Not allowed to search: what we know stays as it is. The interval stays full, so we search as soon as we may again.
+	if not self.Configuration:IsPermitted(Permissions.CanSearchTargets) then
+		return
+	end
+
+	self.curInterval = 0
+	self:UpdateTargets()
 end
 
 function SearchTask:Start()

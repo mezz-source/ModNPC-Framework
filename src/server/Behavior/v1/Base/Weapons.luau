@@ -1,7 +1,10 @@
 local ServerScriptService = game:GetService("ServerScriptService")
+local TypeBlock = require(ServerScriptService.ModNPCServer.Types.v1.TypeBlock)
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
+local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
+local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
 
 local Weapons = {}
 Weapons.__index = Weapons
@@ -10,6 +13,8 @@ local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local WeaponEvents = TypeCharacterEvents.Names.Weapon
 local ContentEvents = TypeCharacterEvents.Names.Content
 local TargettingEvents = TypeCharacterEvents.Names.Targetting
+local STATE_KEY = TypeState.Keys.WeaponState
+local WeaponStateEnum = TypeState.WeaponStateEnum
 
 -- The core tool animations. Every weapon brings its own in the Core category of its Assets/Animations (the NPC's own
 -- Core animations are the fallback when it does not). They are tracks named like the animation, loaded as that
@@ -57,6 +62,9 @@ function Weapons.new(Base: any, character: Model)
 	self.ArmConnection = nil
 	-- Characters targetting has spotted and not lost yet, so a weapon equipped mid-fight is drawn straight away
 	self.Targets = {} :: { [Model]: boolean }
+
+	-- Equipped while a weapon is in hand (see _equipped and _unequipped); what Abilities reads to allow blocking
+	Base.State:Register(STATE_KEY, WeaponStateEnum)
 
 	-- A source is the weapon's content and exists exactly as long as the weapon is equipped, however it got equipped
 	-- or unequipped (or destroyed). Subscribed after Assets, Sound, Animation and Attacks, so they have loaded the
@@ -277,6 +285,30 @@ function Weapons:_loadAnimations(weapon: Instance)
 	end
 end
 
+-- The weapon's block animations (its Animations/Blocks). Only the weapon's own are looked at, the NPC's are no fallback.
+-- Loaded as the weapon's content too. An animation the weapon doesn't have is just not shown when it blocks.
+function Weapons:_loadBlockAnimations(weapon: Instance)
+	local animations = self.Base.Assets:GetData(weapon).Animations[TypeBlock.AnimationCategory]
+	if not animations then
+		warn("Weapon", weapon.Name, "has no", TypeBlock.AnimationCategory, "animations")
+		return
+	end
+
+	for _, animation in ipairs(animations) do
+		local settings = TypeBlock.AnimationSettings[animation.Name]
+		if settings then
+			self.Functions:CallFunction(
+				FunctionEnum.LoadAnimation,
+				animation,
+				animation.Name,
+				settings.Priority,
+				settings.Loop,
+				weapon
+			)
+		end
+	end
+end
+
 function Weapons:_equipped(weapon: Instance)
 	-- a weapon equipped around this module (straight through the CharacterAPI) while another was held
 	if self.Weapon and self.Weapon ~= weapon then
@@ -284,8 +316,10 @@ function Weapons:_equipped(weapon: Instance)
 	end
 
 	self.Weapon = weapon
+	self.Base.State:Set(STATE_KEY, WeaponStateEnum.Equipped)
 	self.AlwaysArmed = self.CharacterAPI:GetWeaponSetting(weapon, ALWAYS_ARMED_SETTING) == true
 	self:_loadAnimations(weapon)
+	self:_loadBlockAnimations(weapon)
 
 	if self.AlwaysArmed or next(self.Targets) ~= nil then
 		self:_callForArms()
@@ -311,9 +345,15 @@ function Weapons:_unequipped(source: TypeCDN.ContentSource)
 	-- Animation unloads the weapon's tracks when its source is removed, so nothing is left to stop here
 	self:_newArmToken()
 	self.Weapon = nil
+	self.Base.State:Set(STATE_KEY, WeaponStateEnum.None)
 	self.Armed = false
 	self.AlwaysArmed = false
 	self.Loaded = {}
+
+	-- The weapon held the guard (its animations, and the right to block), so one that is up comes down with it. Its tracks
+	-- went with its source already (Animation hears of the removal first).
+	-- (CancelData is Block:Cancel's animationsGone)
+	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Block, "Weapon unequipped", { CancelData = true })
 
 	if wasArmed then
 		self.Base.Events:Dispatch(WeaponEvents.Disarmed, { Weapon = weapon } :: TypeCharacterEvents.WeaponChanged)
