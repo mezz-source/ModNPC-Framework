@@ -4,9 +4,12 @@ local Task = require(script.Parent.Parent.Task)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
+local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
+local Permissions = TypePermissions.Names
 local TargettingEvents = TypeCharacterEvents.Names.Targetting
+local WanderEvents = TypeCharacterEvents.Names.Wander
 
 local CategoryEnum = TypeTask.CategoriesEnum
 local Dependencies = TypeTask.Dependencies
@@ -34,6 +37,7 @@ function WanderTask.new(base, _: number?)
 		Resources = {},
 		Dependencies = {
 			Dependencies.CharacterTasks,
+			Dependencies.Configuration,
 			Dependencies.Events,
 			Dependencies.Functions,
 			Dependencies.Scheduler,
@@ -49,6 +53,7 @@ function WanderTask.new(base, _: number?)
 	local self = setmetatable(task, WanderTask)
 	self.Character = base.Character
 	self.CharacterTasks = base.CharacterTasks
+	self.Configuration = base.Configuration
 	self.Events = base.Events
 	self.Functions = base.Functions
 	self.Scheduler = base.Scheduler
@@ -103,6 +108,12 @@ function WanderTask:PickPosition(): Vector3?
 end
 
 function WanderTask:StartWalk()
+	-- Permissions/CanWander off: no new walks. Rest instead, so the permission is asked again after a moment, not every frame.
+	if not self.Configuration:IsPermitted(Permissions.CanWander) then
+		self:_rest()
+		return
+	end
+
 	local position = self:PickPosition()
 	if not position then
 		self:_rest()
@@ -133,6 +144,8 @@ function WanderTask:StartWalk()
 			self:_rest()
 		end
 	end)
+
+	self.Events:Dispatch(WanderEvents.NewPosition, { Position = position } :: TypeCharacterEvents.NewWanderPosition)
 end
 
 -- A target in sight ends whatever wandering is under way

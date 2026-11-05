@@ -4,6 +4,7 @@ local Task = require(script.Parent.Parent.Task)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeAttack = require(ServerScriptService.ModNPCServer.Types.v1.TypeAttack)
+local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
 
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
@@ -98,18 +99,18 @@ end
 
 -- The attack we have in mind, picked now if there is none yet (or the one we had is gone, like a weapon unequipped).
 -- Nil when the character has no attack of the type to make.
-function AttackTargetsTask:PickDesiredAttack(): TypeAttack.AttackData?
-	local desired = self.Functions:CallFunction(FunctionEnum.GetDesiredAttack)
+function AttackTargetsTask:PickDesiredAttack(): (TypeAttack.AttackData?, TypeCDN.ContentSource?)
+	local desired, source = self.Functions:CallFunction(FunctionEnum.GetDesiredAttack)
 	if desired then
-		return desired
+		return desired, source
 	end
 
 	local attackType = self:GetAttackType()
 	if not attackType then
-		return nil
+		return nil, nil
 	end
 
-	return (self.Functions:CallFunction(FunctionEnum.PickDesiredAttack, attackType))
+	return self.Functions:CallFunction(FunctionEnum.PickDesiredAttack, attackType)
 end
 
 -- Calls the attack function for our targetting range, which crosses the function boundary so mods can hook it
@@ -151,7 +152,7 @@ function AttackTargetsTask:OnReactionUpdate()
 
 	-- The attack in mind is picked even when we can't attack right now, so it is ready to make. While we can't, the movement
 	-- tasks don't hold its standoff, they back the character off (see GetHoldDistance).
-	local attack = self:PickDesiredAttack()
+	local attack, source = self:PickDesiredAttack()
 	if not attack or not self.Functions:CallFunction(FunctionEnum.CanAttack) then
 		return
 	end
@@ -163,7 +164,7 @@ function AttackTargetsTask:OnReactionUpdate()
 	end
 
 	-- Not enough stamina for the attack in mind: it is kept (the stamina will come back) and made once it can be paid for
-	if not self.Functions:CallFunction(FunctionEnum.CanAffordAttack, attack) then
+	if not self.Functions:CallFunction(FunctionEnum.CanAffordAttack, attack, source) then
 		return
 	end
 

@@ -99,12 +99,6 @@ function SearchTask:UpdateFocusTarget()
 	end
 end
 
--- The farthest a target can be and still be considered (Ranges.Provoke), nil if unconfigured (no limit)
-function SearchTask:GetProvokeRange(): number?
-	local range = self.Configuration:GetRange("Provoke")
-	return if type(range) == "number" then range else nil
-end
-
 -- Targets we are allowed to consider: everyone if neutral, otherwise only non-matching teams,
 -- and only those within the provoke range. This runs every search, so a target that walks out of range
 -- drops out of our known targets (and our focus) instead of being chased forever.
@@ -122,7 +116,7 @@ function SearchTask:GetViableTargets(): { TypeTargetting.TargettingContext }
 		end
 	end
 
-	local provokeRange = self:GetProvokeRange()
+	local provokeRange = self.Distance:GetProvokeRange()
 	if not provokeRange then
 		return candidates
 	end
@@ -201,6 +195,10 @@ function SearchTask:OnReactionUpdate(deltaTime: number)
 
 	self.curInterval = 0
 	self:UpdateTargets()
+
+	if self:IsRunning() then
+		self.Events:Dispatch(TargettingEvents.SearchCompleted)
+	end
 end
 
 function SearchTask:Start()

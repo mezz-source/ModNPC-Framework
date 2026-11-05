@@ -166,6 +166,14 @@ local paid = base.Functions:CallFunction(FE.PurchaseStamina, "Dodge")   -- false
 base.Functions:CallFunction(FE.PlayAnimation, "Taunt", 0.1, nil, false)
 ```
 
+Attack prices depend on where the attack comes from. `GetStaminaCost`, `CanAffordStamina` and `PurchaseStamina` take the source as their last argument, and `CanAffordAttack` takes it after the attack. Pass the equipped weapon to get its `Weapon<Weight>AttackConsumption` price; anything else gets the character's `Base<Weight>AttackConsumption`:
+
+```luau
+local attack, source = base.Functions:CallFunction(FE.GetDesiredAttack)
+local affordable = base.Functions:CallFunction(FE.CanAffordAttack, attack, source)
+local price = base.Functions:CallFunction(FE.GetStaminaCost, "HeavyAttack", source)
+```
+
 Function callbacks are **not** wrapped in `pcall`. An error in your hook surfaces in whoever called the function, which may be a task, so keep hooks small and defensive.
 
 ### What can be hooked
@@ -176,16 +184,18 @@ Function callbacks are **not** wrapped in `pcall`. An error in your hook surface
 |---|---|
 | Movement | `StartSprinting`, `StopSprinting`, `Jump`, `Move`, `MoveLeft/Right/Forward/Backward`, `MoveTo`, `StopMoving`, `SetWalkDirection`, `ClearWalkDirection`, `LockMovement`, `UnlockMovement`, `SetFocusTarget`, `RemoveFocusTarget`, `ApplyImpulse`, `ApplyAngularImpulse`, `Wander` |
 | Dodging | `Dodge`, `DodgeLeft/Right/Forward/Backward`, `DodgeRandomly` |
-| Ability gates | `CanMove`, `CanAttack`, `CanDodge`, `CanBlock`, `CanBeEvasive` |
-| Attacks | `AttackCurrentTarget`, `MeleeAttackCurrentTarget`, `RangeAttackCurrentTarget`, `PickDesiredAttack`, `GetDesiredAttack`, `ClearDesiredAttack`, `CanAffordAttack`, `IsReadyToAttack`, `IsPressingOn`, `CancelCurrentAttack` |
-| Defense and damage | `ReactToIncomingAttack`, `BeginBlock`, `EndBlock`, `BreakBlock`, `IsBlocking`, `IsBlockBroken`, `GetHitCategory`, `IsStaggered`, `IsLaunched`, `BeginStagger`, `EndStagger`, `BeginLaunch`, `EndLaunch` |
+| Ability gates | `CanMove`, `CanAttack`, `CanDodge`, `CanBlock`, `CanParry`, `CanBeEvasive` |
+| Attacks | `AttackCurrentTarget`, `MeleeAttackCurrentTarget`, `RangeAttackCurrentTarget`, `PickDesiredAttack`, `GetDesiredAttack`, `ClearDesiredAttack`, `CanAffordAttack`, `IsReadyToAttack`, `IsPressingOn`, `CancelCurrentAttack`, `WouldBounce`, `BounceAttack` |
+| Defense and damage | `ReactToIncomingAttack`, `BeginBlock`, `EndBlock`, `BreakBlock`, `IsBlocking`, `IsBlockBroken`, `BeginParry`, `CloseParry`, `EndParry`, `IsParrying`, `GetHitCategory`, `IsStaggered`, `IsLaunched`, `BeginStagger`, `EndStagger`, `BeginLaunch`, `EndLaunch` |
 | Stamina | `GetStamina`, `GetStaminaCost`, `GetStaminaEfficiency`, `IsExhausted`, `CanAffordStamina`, `PurchaseStamina`, `SpendStamina`, `RestoreStamina`, `BreakStamina` |
 | Skills | `GetSkillLevel`, `GetSkillChance`, `RollSkill`, `RollSkills` |
 | Disposition | `GetDisposition`, `GetEngageDistance`, `GetHoldDistance`, `GetAttackStandoff`, `GetAttackFit`, `GetAttackPace` |
+| Friends | `GetTeammates`, `IsTeammate`, `GetTeammateDistance`, `GetFriends`, `GetNearbyFriends`, `IsFriend`, `RequestFriend`, `ReceiveFriendRequest` |
 | Targeting | `GetTargets`, `IsValidTargetPreference`, `SelectBestTarget` |
-| Presentation | `PlaySound`, `PlaySoundCategory`, `PlayVFX`, `PlayVFXGroup`, `LoadAnimation`, `PlayAnimation`, `StopAnimation` |
+| Presentation | `PlaySound`, `PlaySoundCategory`, `PlayVFX`, `PlayVFXGroup`, `CreateParticle`, `LoadAnimation`, `PlayAnimation`, `StopAnimation` |
 | Weapons | `EquipWeapon`, `UnequipWeapon`, `ArmWeapon`, `DisarmWeapon` |
 | Stimulants | `ReceiveStimulant`, `DropStimulant`, `GetStimulants`, `PeekStimulant`, `ConsumeStimulant` |
+| Dialogue | `SayLine(category, { Names = {...}?, Options = {...}?, RollChattiness = true?, IgnoreCooldown = true? }?)`: a random line of the category at its `Config/Dialogue/Priorities` priority, `%s` filled from `Names`. A category can't be said again for its `Config/Dialogue/Cooldown` seconds (3 by default) unless `IgnoreCooldown`; with `RollChattiness` it is only said if a `Config/Dialogue/Chattiness` (0 to 1) roll passes. A category with a `Config/Dialogue/MaxRandomDelay` waits a random 0 to that many seconds first (true then means it is lined up; it is dropped if something more important started meanwhile). Returns whether it plays. `Conversations` is refused. `StartBanter(target)`: after an attack, a `CombatBanterStart` line (chattiness rolled) and, once typed, the target is asked to answer. `BanterRespond(starter)`: what the target answers with (`CombatBanterRespond`); the API calls it on the target. |
 
 Signatures are in `TypeBehavior.FunctionCallbacks`. When you are not sure which function something goes through, [05_FunctionTracer](Example%20Scripts/05_FunctionTracer.luau) prints every call to the functions you list, with arguments.
 
@@ -221,12 +231,21 @@ The names mods use most:
 | `Combat.DamageTaken` | `Amount`, `MaxHealth`, `Attacker?`, `DamageType?`, `Special?` | Health came off the character |
 | `Combat.DefenseSucceeded` | `Attacker?`, `RecieveType` | A hit was dodged or blocked |
 | `Combat.DefenseReaction` | `TypeDefense.DefenseReaction` | The character decided how to meet an incoming hit |
-| `Combat.AttackLanded` / `AttackDefended` / `AttackMissed` | `Target`, `AttackName`, `HitName`, `Amount`, `RecieveType?` | How one hit of this character's attack turned out |
+| `Combat.AttackLanded` / `AttackDefended` / `AttackMissed` | `Target`, `AttackName`, `HitName`, `Amount`, `RecieveType?`, `Special?` | How one hit of this character's attack turned out (`Special` is what the target says was applied) |
+| `Combat.AttackBounced` | `Opponent?` | The character's attack met one of the same damage type and weight; sent on both sides, in place of the outcomes above and `DefenseSucceeded` |
+| `Combat.AttackEnded` | `Target`, `AttackName`, `Finished` | One of the character's attacks that got to swing is over (`Finished` false when cut short) |
+| `Combat.BlockBroken` | `Reason?` | The character's guard was broken |
+| `Combat.Launched` | none | The character is being launched (it just took the launched state) |
+| `Combat.LaunchEnded` | `Recovered` | The launch is over; `Recovered` is false when it was cut short (death) rather than got up from |
+| `Wander.NewPosition` | `Position` | The Wander task started walking to a new spot |
 | `Humanoid.Died` | none | The character died |
 | `Humanoid.HealthChanged` | `Health`, `MaxHealth` | Any health change |
 | `Stamina.Changed` | `Previous`, `Current`, `Max`, `Reason?` | Stamina or its maximum changed |
 | `Stamina.ExhaustionStarted` / `ExhaustionEnded` | `Current`, `Max`, `Efficiency` | Exhaustion began or ended |
 | `Targetting.TargetSpotted` / `NewFocusTarget` / `TargetLost` / `AllTargetsLost` | | Target discovery and loss |
+| `Targetting.SearchCompleted` | none | A target search finished, after its target events |
+| `Targetting.TeammateSpotted` / `TeammateLost` | `Character`, `Type`, `Team` | A character on this one's team came within its `Provoke` range, or is gone (left the range, died, or either side changed teams). Updated after each search, so a character without the `SearchForTargets` task has no teammates. Neutral characters never have teammates. |
+| `Targetting.FriendAdded` / `FriendLost` | `Character`, `Team`, `Initiated` | A connection was made, on both sides (`Initiated` is true for the one who asked), or a friend left the target registry or the team. Friends stay friends out of range; `GetNearbyFriends` gives the ones in range. |
 | `Weapon.Equipped` / `Unequipped` / `Armed` / `Disarmed` | `Weapon` | Weapon changes |
 | `Thought.ReactionUpdate` | seconds since the last tick | The character's reaction tick. See [Custom Tasks](Custom%20Tasks.md#deciding-and-acting). |
 | `Stimulant.Pending` | the queued stimulants, most urgent first | Each reaction tick while any are queued |
@@ -252,7 +271,7 @@ Mods never change instances through the Humanoid or the model. They ask the API,
 | Find targets | `GetOpposingTargets()`, `GetSameTeamTargets()`, `GetAllTargets()`, `GetTargetsOfType(type)` |
 | Distances | `GetDistanceTo(model)`, `GetDistanceToPosition(position)` |
 | Team, status | `GetTeam()`, `IsExhausted(model?)`, `IsStaggered(model?)` |
-| Hurt another character | `DealDamage(receiver, amount, damageType?, special?, maxStaggerTime?)`. Normally an attack does this. |
+| Hurt another character | `DealDamage(receiver, amount, damageType?, special?, maxStaggerTime?, attackWeight?)`. Normally an attack does this. |
 | Push | `ApplyImpulse`, `PushAway(target, force)` |
 
 Bars and highlights come back as plain tables of closures (the same bindable-copy rule as mods), so call their methods with a colon and don't rely on a metatable.
@@ -290,7 +309,9 @@ end)
 | `CanThink` | The character is frozen. No task is dropped, but nothing on `base.Heartbeat` (the scheduler, the thought process, stamina, mods) is updated, and no reaction ticks come, until it is back on. |
 | `CanDodge` | No dodging (`CanDodge` says no), which also rules out being evasive (strafing, `CanBeEvasive`). |
 | `CanBlock` | No new guard (`CanBlock` says no). |
+| `CanParry` | No new parry (`CanParry` says no). |
 | `CanSprint` | `StartSprinting` is declined, and nothing is paid for it. |
+| `CanWander` | The Wander task starts no new walks, so a character with no target stands where it is. A walk already under way finishes. |
 | `CanBeStaggered` | Hits don't stagger the character (`Stagger` and `StaggerBackwards` are dropped from the hit). |
 | `CanBeLaunched` | Hits don't launch the character. |
 | `CanBeDamaged` | Hits take no health. They still land, are blocked or dodged, and are announced as usual. |
@@ -378,7 +399,7 @@ base.Events:Subscribe(Events.Stimulant.Pending, function(pending)
 end)
 ```
 
-A stimulant that isn't consumed stays queued (and is announced again) until it expires. The built-in names (`IncomingAttack`, `SprintingTowards`, `BlockBroken`, `Exhausted`) are in `TypeStimulant.Names`. A mod's own stimulant has meaning only to characters whose mods react to it, so a feature like this needs the mod on both sides. [07_IntimidateTask](Example%20Scripts/07_IntimidateTask.luau) does both halves in one script.
+A stimulant that isn't consumed stays queued (and is announced again) until it expires. The built-in names (`IncomingAttack`, `SprintingTowards`, `BlockBroken`, `Exhausted`, `Died`) are in `TypeStimulant.Names`. A mod's own stimulant has meaning only to characters whose mods react to it, so a feature like this needs the mod on both sides. [07_IntimidateTask](Example%20Scripts/07_IntimidateTask.luau) does both halves in one script.
 
 ---
 

@@ -27,6 +27,7 @@ local Defense = require(script.Defense)
 local StimulantBuilder = require(script.StimulantBuilder)
 local Scheduler = require(script.Scheduler)
 local TargetSelector = require(script.TargetSelector)
+local Friends = require(script.Friends)
 local CharacterTasks = require(script.CharacterTasks)
 local Task = require(script.Task)
 local TypeBehavior = require(ServerScriptService.ModNPCServer.Types.v1.TypeBehavior)
@@ -130,6 +131,8 @@ function Base.new(character: Model)
 	self.Stimulants = Stimulants.new(self, character)
 	-- How we meet the hits the stimulants warn us of. Registers the DefenseState, which Abilities reads.
 	self.Defense = Defense.new(self :: any, character)
+	-- Who is on our side, kept up to date by the search task's searches
+	self.Friends = Friends.new(self :: any, character)
 	self.Movement:Init()
 	self.Damage:Init()
 	self.Stamina:Init()
@@ -141,6 +144,7 @@ function Base.new(character: Model)
 	self:_registerMainFunctions()
 	self:_registerModScripts()
 
+	self.Stamina:InitParticle()
 	-- After the mod scripts, so they can hook EquipWeapon before the first weapon goes on. Equipping runs functions,
 	-- which are only registered now.
 	self.Attacks:Init()

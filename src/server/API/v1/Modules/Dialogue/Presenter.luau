@@ -29,13 +29,14 @@ type Board = TypeDialogue.Board
 type Glyph = TypeDialogue.Glyph
 type Presenter = TypeDialogue.Presenter
 type PresenterOptions = TypeDialogue.PresenterOptions
+type PresentOptions = TypeDialogue.PresentOptions
 
 local Events = TypeDialogue.Events
 
 local Presenter = {}
 
 local DEFAULT_CHARS_PER_SECOND = 30
-local DEFAULT_HOLD_TIME = 5
+local DEFAULT_HOLD_TIME = 2
 local DEFAULT_FADE_OUT_TIME = 0.5
 
 -- A typed letter and how it looked when it was cloned, so fades scale its own transparencies
@@ -58,17 +59,20 @@ end
 
 function Presenter.new(board: Board, options: PresenterOptions?): Presenter
 	local opts: PresenterOptions = options or {}
-	local charsPerSecond = opts.CharsPerSecond or DEFAULT_CHARS_PER_SECOND
-	local holdTime = opts.HoldTime or DEFAULT_HOLD_TIME
-	local fadeOutTime = opts.FadeOutTime or DEFAULT_FADE_OUT_TIME
+	local defaultCharsPerSecond = opts.CharsPerSecond or DEFAULT_CHARS_PER_SECOND
+	local defaultHoldTime = opts.HoldTime or DEFAULT_HOLD_TIME
+	local defaultFadeOutTime = opts.FadeOutTime or DEFAULT_FADE_OUT_TIME
 	local onEvent = opts.OnEvent
 	local onBlip = opts.OnBlip
+	local onFinished = opts.OnFinished
 	local textSize = board.Settings.TextSize
 
 	-- Goes up on every stop, so a Present still measuring when it is replaced knows to give up
 	local generation = 0
 	local connection: RBXScriptConnection? = nil
 	local presenting = false
+	-- From Present until every letter is typed (measuring counts as typing)
+	local typing = false
 	local destroyed = false
 
 	local function stop()
@@ -78,15 +82,22 @@ function Presenter.new(board: Board, options: PresenterOptions?): Presenter
 			connection = nil
 		end
 		presenting = false
+		typing = false
 		board.Clear()
 	end
 
 	local presenter = {} :: Presenter
 
-	function presenter.Present(text: string)
+	function presenter.Present(text: string, presentOptions: PresentOptions?)
 		assert(not destroyed, "Presenter is destroyed")
+		local present: PresentOptions = presentOptions or {}
+		local charsPerSecond = present.CharsPerSecond or defaultCharsPerSecond
+		local holdTime = present.HoldTime or defaultHoldTime
+		local fadeOutTime = present.FadeOutTime or defaultFadeOutTime
+		local color = present.Color
 		stop()
 		presenting = true
+		typing = true
 		local thisGeneration = generation
 
 		local layout, parsed = board.Build(text)
@@ -122,7 +133,7 @@ function Presenter.new(board: Board, options: PresenterOptions?): Presenter
 					continue
 				end
 
-				local label = board.AddLetter(glyph)
+				local label = board.AddLetter(glyph, color)
 				table.insert(shown, {
 					Glyph = glyph,
 					Label = label,
@@ -139,11 +150,18 @@ function Presenter.new(board: Board, options: PresenterOptions?): Presenter
 				task.spawn(onBlip, blip)
 			end
 
+			if time >= typedAt then
+				typing = false
+			end
+
 			local fade = 1
 			if time >= fadeOutAt then
 				fade = if fadeOutTime > 0 then 1 - (time - fadeOutAt) / fadeOutTime else 0
 				if fade <= 0 then
 					stop()
+					if onFinished then
+						task.spawn(onFinished)
+					end
 					return
 				end
 			end
@@ -174,6 +192,10 @@ function Presenter.new(board: Board, options: PresenterOptions?): Presenter
 
 	function presenter.IsPresenting(): boolean
 		return presenting
+	end
+
+	function presenter.IsTyping(): boolean
+		return typing
 	end
 
 	function presenter.Destroy()

@@ -669,13 +669,13 @@ function Disposition:GetHoldDistance(targettingRange: TypeTargetting.TargettingR
 		return preferred
 	end
 
-	local attack = functions:CallFunction(FunctionEnum.GetDesiredAttack)
+	local attack, source = functions:CallFunction(FunctionEnum.GetDesiredAttack)
 	if not attack then
 		return preferred
 	end
 
 	-- An attack we can't pay for is not worth closing in for either
-	if not functions:CallFunction(FunctionEnum.CanAffordAttack, attack) then
+	if not functions:CallFunction(FunctionEnum.CanAffordAttack, attack, source) then
 		return preferred
 	end
 

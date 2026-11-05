@@ -36,8 +36,7 @@ local FADE_TIME = 0.1
 --   DesiredRange    the target must be within it, or there is no task at all (getting there is up to whoever attacks)
 --   Limbs           the arms and/or legs it claims, which cancels the tasks already using them
 --   AllowMoving     when off, the movement tasks are stopped and the character is held still until the attack is over
---   AllowInterrupts when on, stopping the task cuts the animation short. When off the animation plays out, the task
---                   just stops caring about it.
+--   AllowInterrupts when on, a hit strong enough can cut the attack short (see CanBeInterrupted). When off only a Cancel can.
 --   IsCombo         how many hits it has
 --   Debounce        how long the attack state stays Swinging once the last hit has landed
 -- The target is warned of each hit with an IncomingAttack stimulant: the first as soon as the attack is paid for, each
@@ -45,6 +44,9 @@ local FADE_TIME = 0.1
 -- the event's time isn't known) and is retracted once the hit resolves or the attack is cut short.
 -- An exhausted character attacks at the speed of its stamina efficiency (animation and debounce), though never slower than
 -- the attack's MinEfficiency, and its hits do the efficiency's share of their damage.
+-- An attack cut short takes its animation with it, while one that landed its last hit plays its follow-through out. A hit that
+-- is parried cancels every attack the character is making, and so does one that bounces off the target's (see Attacks:BounceAttack).
+-- A weapon's attack shows the weapon's trail (if it uses one) from the swing until the task ends, however it ends.
 -- Replace on purpose: starting an attack cuts short whatever else is using the limbs it needs.
 local AttackTask = {}
 AttackTask.__index = AttackTask
@@ -142,10 +144,11 @@ function AttackTask.new(base, context: TypeAttack.AttackContext)
 	-- Whether we hold the attack state, so one we never took is never given back
 	self.HoldsState = false
 	self.MovementHeld = false
+	-- The weapon whose trail we turned on, so the same one goes off even if it has left the character's hand by then
+	self.TrailWeapon = nil :: Instance?
 	-- Set when the last hit lands. A task that ended any other way was interrupted.
 	self.Finished = false
 	-- Set by Cancel: the attack is cut short even if its data doesn't allow interrupts
-	self.Cancelled = false
 	-- The IncomingAttack stimulant out for the hit we are waiting on, to retract once it is no longer true
 	self.StimulantId = nil :: number?
 
@@ -202,19 +205,42 @@ function AttackTask:Start()
 
 	-- one swing for the whole attack, a combo included
 	self:_playSound(attack.SwingSoundName)
+	self:_showTrail()
 	self:_listenForHit(1)
 
 	return true
 end
 
--- Buys the stamina a hit costs, by its weight. Declined (with why) when the character can't pay it.
+-- A source that is an Instance is a weapon. The character's own attacks ("Base") have no trail, whatever it is holding.
+function AttackTask:_showTrail()
+	local source = self.Context.Source
+	if typeof(source) ~= "Instance" then
+		return
+	end
+
+	self.TrailWeapon = source
+	self.CharacterAPI:SetWeaponTrail(source, true)
+end
+
+function AttackTask:_hideTrail()
+	local weapon = self.TrailWeapon
+	if not weapon then
+		return
+	end
+
+	self.TrailWeapon = nil
+	self.CharacterAPI:SetWeaponTrail(weapon, false)
+end
+
+-- Buys the stamina a hit costs, by its weight, at the price of the attack's source: a weapon's attack is priced by the
+-- weapon, the character's own by the character. Declined (with why) when the character can't pay it.
 function AttackTask:_payForHit(hit: TypeAttack.HitContext): (boolean, string?)
 	local cost = TypeAttack.WeightCosts[hit.AttackWeight]
 	if not cost then
 		return false, "Unknown attack weight: " .. tostring(hit.AttackWeight)
 	end
 
-	return self.Functions:CallFunction(FunctionEnum.PurchaseStamina, cost)
+	return self.Functions:CallFunction(FunctionEnum.PurchaseStamina, cost, nil, self.Context.Source)
 end
 
 -- How well the character does things right now (1 rested, less when exhausted, see Stamina). An attack goes at this speed
@@ -235,6 +261,11 @@ function AttackTask:_applySpeed()
 	self.Handle:AdjustSpeed(self:_getSpeed())
 end
 
+-- The hit we are waiting on, nil unless the attack is running
+function AttackTask:GetCurrentHit(): TypeAttack.HitContext?
+	return if self:IsRunning() then self.Hits[self.HitIndex] else nil
+end
+
 -- Whether the attack lets itself be cut short: only while it is running, and only if its data allows interrupts
 function AttackTask:CanBeInterrupted(): boolean
 	return self:IsRunning() and self.Context.Attack.AllowInterrupts
@@ -243,7 +274,6 @@ end
 -- Ends the attack whether or not its data allows interrupts, and its animation with it. For things that take the
 -- character's control away (a stagger); a hit that merely tries to interrupt goes through CanBeInterrupted instead.
 function AttackTask:Cancel(reason: string?): boolean
-	self.Cancelled = true
 	return self:Stop(reason or "Attack cancelled")
 end
 
@@ -341,6 +371,7 @@ function AttackTask:_announceOutcome(eventName: string, hit: TypeAttack.HitConte
 		HitName = hit.Name,
 		Amount = if dealt then dealt.Amount else 0,
 		RecieveType = if dealt then dealt.RecieveType else nil,
+		Special = if dealt then dealt.Special else nil,
 	} :: TypeCharacterEvents.AttackOutcome)
 end
 
@@ -357,10 +388,6 @@ function AttackTask:_hitReached(index: number)
 	local hit = self.Hits[index]
 	local target = self.Context.Target
 
-	if hit.LungeForce > 0 then
-		self.CharacterAPI:ApplyForwardImpulse(hit.LungeForce)
-	end
-
 	-- The target may have moved (or be gone) since the swing began: a hit that finds it out of range whiffs, and a
 	-- combo carries on to its next hit
 	if self.Distance:IsWithin(target, self.Context.Attack.DesiredRange) then
@@ -373,7 +400,8 @@ function AttackTask:_hitReached(index: number)
 				hit.BaseDamage * self:_getEfficiency(),
 				hit.DamageType,
 				special,
-				hit.MaxStaggerTime
+				hit.MaxStaggerTime,
+				hit.AttackWeight
 			)
 		local dealt = if response then response.Data else nil
 		-- A hit that connected sounds like one and pushes the target back, a blocked one included (it connected, it just
@@ -387,12 +415,30 @@ function AttackTask:_hitReached(index: number)
 		end
 		-- without an answer from the target there is nothing to say about how the hit went. A blocked hit connected but
 		-- the attack still failed to land.
-		if dealt then
+		if dealt and dealt.RecieveType == TypeDamage.RecieveTypes.Bounced then
+			-- It met the target's own attack: nobody landed or defended anything, and both are cancelled
+			self.Functions:CallFunction(FunctionEnum.BounceAttack, target)
+		elseif dealt then
 			local landed = dealt.RecieveType == TypeDamage.RecieveTypes.Hit
 			self:_announceOutcome(if landed then CombatEvents.AttackLanded else CombatEvents.AttackDefended, hit, dealt)
+
+			-- Being parried ends the attack, and any other this character is making, whatever comes back with it
+			if dealt.RecieveType == TypeDamage.RecieveTypes.Parried then
+				self.Scheduler:StopCategory(CategoryEnum.Attack, "Parried")
+			end
 		end
 	else
 		self:_announceOutcome(CombatEvents.AttackMissed, hit, nil)
+	end
+
+	-- What the target did about the hit can have ended the attack, and then there is no next hit
+	if not self:IsRunning() then
+		return
+	end
+
+	-- After the hit is settled: impulses add up, so a lunge sent first would throw back against whatever a parry sends us
+	if hit.LungeForce > 0 then
+		self.CharacterAPI:ApplyForwardImpulse(hit.LungeForce)
 	end
 
 	if index < #self.Hits then
@@ -446,10 +492,17 @@ end
 function AttackTask:_cleanup()
 	self:_disconnectHit()
 	self:_retractWarning()
+	self:_hideTrail()
 
 	if self.MovementHeld then
 		self.MovementHeld = false
 		self.Functions:CallFunction(FunctionEnum.UnlockMovement, self)
+	end
+
+	-- An attack cut short takes its animation with it, however it was. One that finished has only its follow-through left, which
+	-- plays out. A dead character has no tracks left to stop.
+	if self.Handle and not self.Finished and self.Base:IsAlive() then
+		self.Functions:CallFunction(FunctionEnum.StopAnimation, self.Context.AnimationName, FADE_TIME)
 	end
 
 	if not self.HoldsState then
@@ -458,6 +511,13 @@ function AttackTask:_cleanup()
 	self.HoldsState = false
 
 	local attack = self.Context.Attack
+
+	-- (only an attack that got to swing holds the state, so one that couldn't be paid for or shown isn't announced)
+	self.Events:Dispatch(CombatEvents.AttackEnded, {
+		Target = self.Context.Target,
+		AttackName = attack.Name,
+		Finished = self.Finished == true,
+	} :: TypeCharacterEvents.AttackEnded)
 
 	-- All hits landed: the attack state stays up for the debounce, after the task itself is gone. A slower attack recovers
 	-- slower as well.
@@ -471,12 +531,6 @@ function AttackTask:_cleanup()
 		end
 
 		return
-	end
-
-	-- Interrupted. An attack that allows it (or was cancelled) is cut short, any other plays its animation out and only
-	-- stops mattering.
-	if (attack.AllowInterrupts or self.Cancelled) and self.Handle then
-		self.Functions:CallFunction(FunctionEnum.StopAnimation, self.Context.AnimationName, FADE_TIME)
 	end
 
 	self:_releaseState()

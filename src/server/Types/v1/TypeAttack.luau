@@ -128,7 +128,7 @@ TypeAttack.AttackWeights = table.freeze({
 	Heavy = "Heavy",
 })
 
--- The stamina cost each weight is bought as (the prices are in the character's Config/Stamina)
+-- The stamina cost each weight is bought as (priced by the attack's source, see TypeStamina.SourceCosts)
 TypeAttack.WeightCosts = table.freeze({
 	[TypeAttack.AttackWeights.Light] = TypeStamina.Costs.LightAttack,
 	[TypeAttack.AttackWeights.Medium] = TypeStamina.Costs.MediumAttack,

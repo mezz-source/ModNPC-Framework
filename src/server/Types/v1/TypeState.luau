@@ -13,6 +13,8 @@ export type EngageState = "Pursuing" | "Engaged"
 export type ExhaustionState = "None" | "Exhausted"
 export type BlockState = "None" | "Blocking"
 export type BlockBreakState = "Inactive" | "Active"
+export type ParryState = "None" | "Parrying" | "Recovering"
+export type BounceState = "None" | "Bouncing"
 export type DefenseState = "None" | "Reacting"
 export type WeaponState = "None" | "Equipped"
 
@@ -28,6 +30,8 @@ TypeState.Keys = table.freeze({
 	ExhaustionState = "ExhaustionState",
 	BlockState = "BlockState",
 	BlockBreakState = "BlockBreakState",
+	ParryState = "ParryState",
+	BounceState = "BounceState",
 	DefenseState = "DefenseState",
 	WeaponState = "WeaponState",
 })
@@ -94,16 +98,32 @@ TypeState.BlockBreakStateEnum = table.freeze({
 	Active = "Active",
 })
 
--- Registered by Defense. Reacting from the moment the character decides how to meet a hit it saw coming (a dodge timed to
--- it, or a guard raised for it) until that is done with, during which it doesn't start an attack of its own (see
+-- Registered by Damage, held by a Parry task. Parrying until the ParryEnd marker of its animation: hits that come in meanwhile
+-- are parried. Recovering for the rest of the animation: hits land again, but the character is still held. Neither lets the
+-- character move, block or act (see Abilities).
+TypeState.ParryStateEnum = table.freeze({
+	None = "None",
+	Parrying = "Parrying",
+	Recovering = "Recovering",
+})
+
+-- Registered by Attacks, held by a Bounce task. Bouncing from the moment the character's attack bounces off another until the
+-- bounce animation ends, during which it can't attack (see Abilities.CanAttack).
+TypeState.BounceStateEnum = table.freeze({
+	None = "None",
+	Bouncing = "Bouncing",
+})
+
+-- Registered by Defense. Reacting from the moment the character decides how to meet a hit it saw coming (a dodge or parry
+-- timed to it, or a guard raised for it) until that is done with, during which it doesn't start an attack of its own (see
 -- Abilities.CanAttack), as the swing would take the dodge or the guard away from it.
 TypeState.DefenseStateEnum = table.freeze({
 	None = "None",
 	Reacting = "Reacting",
 })
 
--- Registered by Weapons. Equipped for as long as a weapon is in hand, armed (drawn) or not. The weapon holds the block
--- animations, so a character can't block without one (see Abilities.CanBlock).
+-- Registered by Weapons. Equipped for as long as a weapon is in hand, armed (drawn) or not. The weapon holds the block and
+-- parry animations, so a character can't block or parry without one (see Abilities.CanBlock and CanParry).
 TypeState.WeaponStateEnum = table.freeze({
 	None = "None",
 	Equipped = "Equipped",

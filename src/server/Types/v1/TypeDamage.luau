@@ -1,6 +1,6 @@
 local TypeDamage = {}
 
-export type RecieveType = "Hit" | "Blocked" | "Dodged" | "Nullified"
+export type RecieveType = "Hit" | "Blocked" | "Parried" | "Dodged" | "Bounced" | "Nullified"
 
 -- What kind of damage a hit does, for the receiver to react to (resist, ...). General is damage we know nothing about
 -- (a legacy script took health off the humanoid behind our back).
@@ -21,6 +21,9 @@ export type IncomingDamageContext = {
 	-- Longest a Stagger special can hold the receiver (seconds); it rolls somewhere between none and this. Only read for
 	-- Stagger, and a Stagger without it has no loop at all.
 	MaxStaggerTime: number?,
+	-- How heavy the attack that made the hit says it is, which is what decides its category. Missing for anything that isn't
+	-- an attack, which goes by its damage instead (see Damage:GetHitCategory).
+	AttackWeight: HitCategory?,
 }
 
 -- What the character's Damage module processes. Registered damage still has to be applied to the humanoid;
@@ -33,6 +36,7 @@ export type ReceivedDamageContext = {
 	DamageType: DamageType?,
 	Special: DamageSpecial?,
 	MaxStaggerTime: number?,
+	AttackWeight: HitCategory?,
 	Registered: boolean,
 }
 
@@ -42,7 +46,8 @@ export type OutgoingDamageContext = {
 	Amount: number,
 	DamageType: DamageType?,
 	-- Whether the hit connected. A blocked hit did (it knocks back and sounds like a hit) but its Amount is 0, or only part of
-	-- the damage if the blocker was exhausted (the share its stamina efficiency doesn't absorb); a dodged one didn't connect at all.
+	-- the damage if the blocker was exhausted (the share its stamina efficiency doesn't absorb); a dodged, parried or bounced one
+	-- didn't connect at all.
 	DidHit: boolean,
 	RecieveType: RecieveType,
 	-- The special that was applied. Missing when the hit had none, or did not land (a blocked hit applies nothing). It can
@@ -53,6 +58,7 @@ export type OutgoingDamageContext = {
 	StaggerDuration: number?,
 	-- Whether Vitality saved the receiver from the full effect of the special, by changing it or cutting it short
 	Resisted: boolean?,
+	AttackWeight: HitCategory?,
 }
 
 TypeDamage.DamageTypes = table.freeze({
@@ -81,7 +87,8 @@ TypeDamage.BlockMultipliersFolder = "BlockMultipliers"
 TypeDamage.Settings = table.freeze({
 	-- Multiplies the damage a hit does to this character, after defenses. 0 takes no damage at all.
 	RecieveMultiplier = "RecieveMultiplier",
-	-- Damage up to and including this plays a light hit reaction, up to MediumThreshold a medium one, anything above is heavy
+	-- How a hit without a weight of its own is categorised: damage up to and including this is light, up to MediumThreshold
+	-- medium, anything above is heavy (see Damage:GetHitCategory)
 	LightThreshold = "LightThreshold",
 	MediumThreshold = "MediumThreshold",
 	-- Damage below this is too little to react to
@@ -102,6 +109,7 @@ TypeDamage.BlockSound = "Blocked"
 TypeDamage.BlockBreakSound = "BlockBreak"
 -- The individual VFX a character emits on itself when its guard is broken
 TypeDamage.BlockBreakVFX = "BlockBreakEffect"
+TypeDamage.ParryVFX = "ParryEffect"
 
 -- The settings of a character's Config/Health folder that Damage reads (the health status follows from them). The same
 -- default rule applies as for Settings.
@@ -148,7 +156,7 @@ TypeDamage.AnimationCategories = table.freeze({
 	Launch = "Launch",
 })
 
--- How heavy a hit is, by the damage it comes with (see Damage:GetHitCategory). The same split the hit reactions go by.
+-- How heavy a hit is: the weight its attack lists, or by its damage when it has none (see Damage:GetHitCategory)
 export type HitCategory = "Light" | "Medium" | "Heavy"
 
 TypeDamage.HitCategories = table.freeze({
@@ -160,7 +168,10 @@ TypeDamage.HitCategories = table.freeze({
 TypeDamage.RecieveTypes = table.freeze({
 	Hit = "Hit",
 	Blocked = "Blocked",
+	Parried = "Parried",
 	Dodged = "Dodged",
+	-- The hit met one of the same damage type and weight coming the other way, and both attacks are cancelled
+	Bounced = "Bounced",
 	Nullified = "Nullified",
 })
 

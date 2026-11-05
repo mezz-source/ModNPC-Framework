@@ -149,12 +149,33 @@ local function getSoundsByPrefix(prefix: string, sounds: SoundList): { Sound }
 	return matches
 end
 
--- A looping sound that is already playing is left alone; any other sound is restarted so repeated one-shots are heard
-local function startSound(sound: Sound)
+-- Every play is pitched by a random amount within +/- this fraction of the sound's base speed (0.06 = 6%)
+local PLAYBACK_SPEED_VARIATION = 0.06
+local BASE_SPEED_ATTRIBUTE = "BasePlaybackSpeed"
+
+-- The speed the sound was configured with. It is remembered the first time it is needed, because PlaybackSpeed itself
+-- is overwritten by every varied play and would otherwise drift away from what the sound data asked for.
+local function getBasePlaybackSpeed(sound: Sound): number
+	local base = sound:GetAttribute(BASE_SPEED_ATTRIBUTE)
+	if typeof(base) ~= "number" then
+		base = sound.PlaybackSpeed
+		sound:SetAttribute(BASE_SPEED_ATTRIBUTE, base)
+	end
+
+	return base
+end
+
+-- A looping sound that is already playing is left alone; any other sound is restarted so repeated one-shots are heard.
+-- speedOverride replaces the base speed for this play only, the variation is applied on top of whichever base is used.
+local function startSound(sound: Sound, speedOverride: number?)
+	if sound.IsPlaying and sound.Looped then
+		return
+	end
+
+	local base = speedOverride or getBasePlaybackSpeed(sound)
+	sound.PlaybackSpeed = base * (1 + (math.random() * 2 - 1) * PLAYBACK_SPEED_VARIATION)
+
 	if sound.IsPlaying then
-		if sound.Looped then
-			return
-		end
 		sound.TimePosition = 0
 	end
 
@@ -190,7 +211,7 @@ function Sound.playSoundGroup(_character: Model, prefix: string, sounds: SoundLi
 end
 
 -- Plays one random sound out of the category that shares the prefix. Data is the sound started.
--- playbackSpeed is optional; when given it is applied to the sound before it plays.
+-- playbackSpeed is optional; when given it is used instead of the sound's base speed for this play only.
 function Sound.playSoundCategory(
 	_character: Model,
 	prefix: string,
@@ -207,10 +228,7 @@ function Sound.playSoundCategory(
 	end
 
 	local sound = matches[math.random(1, #matches)]
-	if playbackSpeed then
-		sound.PlaybackSpeed = playbackSpeed
-	end
-	startSound(sound)
+	startSound(sound, playbackSpeed)
 	return response(true, TypeRequests.Enums.StatusCode.Success, "Sound category playing", sound)
 end
 

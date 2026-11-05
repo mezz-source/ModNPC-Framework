@@ -16,6 +16,8 @@ local StaggerStateEnum = TypeState.StaggerStateEnum
 local BlockStateEnum = TypeState.BlockStateEnum
 local DefenseStateEnum = TypeState.DefenseStateEnum
 local BlockBreakStateEnum = TypeState.BlockBreakStateEnum
+local ParryStateEnum = TypeState.ParryStateEnum
+local BounceStateEnum = TypeState.BounceStateEnum
 local WeaponStateEnum = TypeState.WeaponStateEnum
 
 -- A rule is a list of conditions on states, all of which have to hold:
@@ -47,6 +49,10 @@ local NOT_ATTACKING = { [Keys.AttackState] = { AttackStateEnum.Swinging } }
 local NOT_BLOCKING = { [Keys.BlockState] = { BlockStateEnum.Blocking } }
 -- A broken guard stays down until the character has recovered from the exhaustion the break left it in
 local NOT_BLOCK_BROKEN = { [Keys.BlockBreakState] = { BlockBreakStateEnum.Active } }
+-- A parry holds the character from the moment it starts until its animation is over, or a hit is parried
+local NOT_PARRYING = { [Keys.ParryState] = { ParryStateEnum.Parrying, ParryStateEnum.Recovering } }
+-- An attack that bounced leaves the character unable to attack until the bounce animation is over
+local NOT_BOUNCING = { [Keys.BounceState] = { BounceStateEnum.Bouncing } }
 -- A character dealing with a hit it saw coming (a dodge timed to it, a guard raised for it) doesn't swing into it
 local NOT_REACTING = { [Keys.DefenseState] = { DefenseStateEnum.Reacting } }
 local GROUNDED = { [Keys.AirState] = { AirStateEnum.Grounded } }
@@ -58,26 +64,33 @@ local RULES: { [string]: Rule } = {
 	[FunctionEnum.CanMove] = {
 		Permission = Permissions.CanMove,
 		Require = GROUNDED,
-		Forbid = merge(NOT_DEAD, NOT_STAGGERED),
+		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_PARRYING),
 	},
 	-- Attacking is moving's rule, and one attack at a time (which includes its debounce). Not while defending against a hit
-	-- either: the swing would take the arms from a guard raised for it, or the dodge waiting for it.
+	-- either: the swing would take the arms from a guard raised for it, or the dodge waiting for it. Nor until a bounce is over.
 	[FunctionEnum.CanAttack] = {
 		Permission = Permissions.CanAttack,
 		Require = GROUNDED,
-		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING, NOT_REACTING),
+		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING, NOT_REACTING, NOT_PARRYING, NOT_BOUNCING),
 	},
 	-- A dodge can happen in the air, but not in the middle of an attack or while staggered
 	[FunctionEnum.CanDodge] = {
 		Permission = Permissions.CanDodge,
-		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING),
+		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING, NOT_PARRYING),
 	},
 	-- A block needs a weapon in hand (it holds the block animations, armed or not). It raises the arms, which an attack in
 	-- progress is using, and one block at a time. Not with a broken guard either.
 	[FunctionEnum.CanBlock] = {
 		Permission = Permissions.CanBlock,
 		Require = HAS_WEAPON,
-		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING, NOT_BLOCKING, NOT_BLOCK_BROKEN),
+		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING, NOT_BLOCKING, NOT_BLOCK_BROKEN, NOT_PARRYING),
+	},
+	-- A parry needs a weapon in hand too (it holds the parry animations and sounds), and the arms an attack is using. One at
+	-- a time. It is the risky choice: a character with its guard up relies on that instead.
+	[FunctionEnum.CanParry] = {
+		Permission = Permissions.CanParry,
+		Require = HAS_WEAPON,
+		Forbid = merge(NOT_DEAD, NOT_STAGGERED, NOT_ATTACKING, NOT_BLOCKING, NOT_PARRYING),
 	},
 }
 
@@ -128,6 +141,10 @@ end
 
 function Abilities:CanBlock(): (boolean, string?)
 	return self:_check(FunctionEnum.CanBlock)
+end
+
+function Abilities:CanParry(): (boolean, string?)
+	return self:_check(FunctionEnum.CanParry)
 end
 
 -- Rules don't look at the direction, but a mod hooking the function can

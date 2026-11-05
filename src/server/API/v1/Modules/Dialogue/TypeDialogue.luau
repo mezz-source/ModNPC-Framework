@@ -87,7 +87,7 @@ export type BoardOptions = {
 	-- Only the resolution text is measured at; the board scales with the gui, so this doesn't change how big letters look.
 	-- Defaults to 32.
 	TextSize: number?,
-	-- Defaults to Center
+	-- Defaults to Left, since the dialogue gui sits off to the side of the character
 	Alignment: Enum.TextXAlignment?,
 }
 
@@ -106,8 +106,9 @@ export type Board = {
 	-- Removes the oldest line and its letters
 	RemoveOldestLine: () -> (),
 	-- Clones a letter for the glyph onto its line (adding lines up to it), replacing any letter already at its index.
-	-- The glyph's line must not have been removed.
-	AddLetter: (glyph: Glyph) -> TextLabel,
+	-- The glyph's line must not have been removed. The color is for glyphs whose markup names none (the letter ref's own
+	-- color when nil).
+	AddLetter: (glyph: Glyph, color: Color3?) -> TextLabel,
 	GetLetter: (index: number) -> TextLabel?,
 	RemoveLetter: (index: number) -> (),
 	-- Where a glyph's letter sits at rest, in scale of its line's Holder
@@ -152,16 +153,29 @@ export type PresenterOptions = {
 	OnEvent: ((event: Event) -> ())?,
 	-- A letter or digit was typed, at most once a frame. Runs in its own thread, so it may yield.
 	OnBlip: ((glyph: Glyph) -> ())?,
+	-- A presented text has been typed, held and faded out. Not called when it is cancelled or replaced. Runs in its own thread.
+	OnFinished: (() -> ())?,
+}
+
+-- Overrides for one Present; anything left out takes the presenter's setting
+export type PresentOptions = {
+	CharsPerSecond: number?,
+	HoldTime: number?,
+	FadeOutTime: number?,
+	-- For letters whose markup names no color
+	Color: Color3?,
 }
 
 -- Types text onto a Board and keeps it there until it is finished (then holds and fades out), cancelled, or replaced
 export type Presenter = {
 	-- Shows the text in full, replacing anything presented before. Yields while the text is measured.
-	Present: (text: string) -> (),
+	Present: (text: string, options: PresentOptions?) -> (),
 	-- Clears the board straight away
 	Cancel: () -> (),
 	-- True from Present until the text has faded out or been cancelled
 	IsPresenting: () -> boolean,
+	-- True from Present until every letter has been typed (while measuring, too); false while it holds and fades
+	IsTyping: () -> boolean,
 	-- Cancels and stops presenting for good. The board is left to its owner.
 	Destroy: () -> (),
 }

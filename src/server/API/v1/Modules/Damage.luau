@@ -78,7 +78,8 @@ function Damage.takeDamage(
 	amount: number,
 	damageType: TypeDamage.DamageType?,
 	special: TypeDamage.DamageSpecial?,
-	maxStaggerTime: number?
+	maxStaggerTime: number?,
+	attackWeight: TypeDamage.HitCategory?
 ): TypeModuleResponse.ModuleResponse
 	if not receiver or not receiver:IsA("Model") then
 		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Invalid receiver for takeDamage")
@@ -105,6 +106,7 @@ function Damage.takeDamage(
 		DamageType = damageType,
 		Special = special,
 		MaxStaggerTime = maxStaggerTime,
+		AttackWeight = attackWeight,
 	}
 
 	if characterType == CharacterUtility.Type.ModNPC then

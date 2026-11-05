@@ -12,11 +12,17 @@ TypeTask.CategoriesEnum = table.freeze({
 	Engage = "Engage",
 	-- Guarding with the arms, absorbing the hits that come in until it ends or breaks
 	Block = "Block",
+	-- Trying to parry: takes a hit that comes in during its window, and holds the character until its animation ends
+	Parry = "Parry",
+	-- Thrown back by an attack that bounced off another, and unable to attack until its animation ends
+	Bounce = "Bounce",
 	-- Staggered, the character has no control of itself until it ends
 	Stagger = "Stagger",
 	-- Aimless walking while there is no target (the Wander task). Its own category so ending Movement tasks (a dodge)
 	-- doesn't end wandering for good.
 	Wander = "Wander",
+	-- Says lines about what happens to the character (the DialogueBark task)
+	Dialogue = "Dialogue",
 })
 
 -- These are abstract resources a task need to operate

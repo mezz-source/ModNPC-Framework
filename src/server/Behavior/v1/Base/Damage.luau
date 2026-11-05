@@ -8,7 +8,9 @@ local TypeMovement = require(ServerScriptService.ModNPCServer.Types.v1.TypeMovem
 local TypeStamina = require(ServerScriptService.ModNPCServer.Types.v1.TypeStamina)
 local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
 local TypeHighlights = require(ServerScriptService.ModNPCServer.Types.v1.TypeHighlights)
+local TypeParry = require(ServerScriptService.ModNPCServer.Types.v1.TypeParry)
 local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
+local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStimulant)
 
 local Damage = {}
 Damage.__index = Damage
@@ -18,6 +20,7 @@ local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local CombatEvents = TypeCharacterEvents.Names.Combat
 local StaminaEvents = TypeCharacterEvents.Names.Stamina
 local StateEvents = TypeCharacterEvents.Names.State
+local HumanoidEvents = TypeCharacterEvents.Names.Humanoid
 local AnimationCategories = TypeDamage.AnimationCategories
 local Specials = TypeDamage.Specials
 local Settings = TypeDamage.Settings
@@ -31,10 +34,12 @@ local STAGGER_STATE_KEY = TypeState.Keys.StaggerState
 local DODGE_STATE_KEY = TypeState.Keys.DodgeState
 local BLOCK_STATE_KEY = TypeState.Keys.BlockState
 local BLOCK_BREAK_STATE_KEY = TypeState.Keys.BlockBreakState
+local PARRY_STATE_KEY = TypeState.Keys.ParryState
 local StaggerStateEnum = TypeState.StaggerStateEnum
 local DodgeStateEnum = TypeState.DodgeStateEnum
 local BlockStateEnum = TypeState.BlockStateEnum
 local BlockBreakStateEnum = TypeState.BlockBreakStateEnum
+local ParryStateEnum = TypeState.ParryStateEnum
 local HitCategories = TypeDamage.HitCategories
 
 -- What a setting of the character's Config/Damage (or Config/Health) folder is when the folder doesn't have it, see
@@ -43,7 +48,7 @@ local SETTING_DEFAULTS: { [string]: number } = table.freeze({
 	[HealthSettings.StablePercent] = 70,
 	[HealthSettings.InjuredPercent] = 40,
 	[Settings.RecieveMultiplier] = 1,
-	-- Which hit reaction plays depends on the damage actually taken, not on the share of our health it was
+	-- What a hit without a weight of its own counts as, by its damage rather than the share of our health it was
 	[Settings.LightThreshold] = 30,
 	[Settings.MediumThreshold] = 50,
 	[Settings.MinReactionThreshold] = 5,
@@ -62,6 +67,9 @@ local SPECIAL_PERMISSIONS: { [string]: string } = table.freeze({
 	[Specials.StaggerBackwards] = Permissions.CanBeStaggered,
 	[Specials.Launch] = Permissions.CanBeLaunched,
 })
+
+-- Seconds the Died stimulant stays true for the characters it is broadcast to
+local DIED_STIMULANT_LASTING = 5
 
 local REACTION_FADE_TIME = 0.1
 -- Seconds a StaggerBackwards waits for its animation to finish before it lets go of the character anyway
@@ -107,6 +115,9 @@ function Damage.new(Base: any, character: Model)
 	-- Held by a Block task for as long as it guards (see BeginBlock). Hits that come in meanwhile are absorbed.
 	Base.State:Register(BLOCK_STATE_KEY, BlockStateEnum)
 
+	-- Held by a Parry task from its start until its animation ends (see BeginParry). Hits are parried while it is Parrying.
+	Base.State:Register(PARRY_STATE_KEY, ParryStateEnum)
+
 	-- Active from a guard break until the exhaustion it forces is over (see BreakBlock). The guard can't go up meanwhile.
 	Base.State:Register(BLOCK_BREAK_STATE_KEY, BlockBreakStateEnum, BlockBreakStateEnum.Inactive)
 	-- The highlight of the break in progress, and one still fading out from the last break
@@ -125,6 +136,13 @@ function Damage.new(Base: any, character: Model)
 	-- deferred signals both can arrive after we made them.
 	self.pendingSelfChanges = 0
 	self.lastHealth = self.Humanoid.Health
+
+	-- The last character to hit us through the damage register (blocked hits count, dodged ones never connected)
+	self.lastAttacker = nil :: Model?
+	-- The registered hit that took our health to 0, set before the health is taken and cleared if we survived it. What the
+	-- Died stimulant reads to tell a registered death from damage that bypassed the register.
+	self.fatalHit = nil :: TypeStimulant.DiedDamage?
+	self.diedAnnounced = false
 
 	self.healthChangedConnection = self.Humanoid.HealthChanged:Connect(function(newHealth: number)
 		self:_onHealthChanged(newHealth)
@@ -166,6 +184,59 @@ function Damage:Init()
 			end
 		end)
 	)
+
+	-- Whoever is around is told. Base's own Died handler is subscribed after this one, so the character is not torn down yet.
+	table.insert(
+		self.EventSubscriptions,
+		events:Subscribe(HumanoidEvents.Died, function()
+			self:_announceDeath()
+		end)
+	)
+end
+
+-- Tells every other character the sender has died (a Died stimulant, broadcast). When the killing blow came through the
+-- damage register it is in the data, and so is the last character that hit us through it. Once only: the humanoid can fire
+-- Died more than once.
+function Damage:_announceDeath()
+	if self.diedAnnounced then
+		return
+	end
+	self.diedAnnounced = true
+
+	local fatalHit = self.fatalHit
+	self.fatalHit = nil
+
+	-- an attacker that has since been destroyed is nobody to point at
+	local lastAttacker = self.lastAttacker
+	if lastAttacker and lastAttacker.Parent == nil then
+		lastAttacker = nil
+	end
+
+	local data: TypeStimulant.DiedData = {
+		Registered = fatalHit ~= nil,
+		Damage = fatalHit,
+		LastAttacker = lastAttacker,
+	}
+
+	local ok, position = pcall(function()
+		return self.Character:GetPivot().Position
+	end)
+
+	local builder = self.Base
+		:NewStimulant(TypeStimulant.Names.Died)
+		:ToAll()
+		:Lasting(DIED_STIMULANT_LASTING)
+		:WithData(data)
+		-- the sender is gone by the time anyone reads this
+		:Lingering()
+	if ok then
+		builder:At(position)
+	end
+
+	local sent, sendError = builder:Send()
+	if not sent then
+		warn("Died stimulant could not be sent:", sendError)
+	end
 end
 
 -- Damage that came through the API (attacker aware). Health is still ours to take.
@@ -177,6 +248,7 @@ function Damage:ReceiveRegistered(incoming: TypeDamage.IncomingDamageContext): T
 		DamageType = incoming.DamageType,
 		Special = incoming.Special,
 		MaxStaggerTime = incoming.MaxStaggerTime,
+		AttackWeight = incoming.AttackWeight,
 		Registered = true,
 	})
 end
@@ -269,7 +341,9 @@ end
 
 -- Every hit on this character ends up here. Whether it is defended against is decided before it lands, not here: the
 -- attacker warned us of it (an IncomingAttack stimulant) and Defense met it with a dodge, whose active span is what makes it
--- miss, or a guard, which takes it. A hit nobody warned us of meets whatever we were already doing.
+-- miss, or a guard, which takes it. A hit nobody warned us of meets whatever we were already doing. A parry in its window
+-- meets every registered hit, warned of or not. A hit that gets past all of that can still bounce off an attack of ours aimed at
+-- whoever made it (see Attacks:WouldBounce).
 function Damage:Receive(context: TypeDamage.ReceivedDamageContext): TypeDamage.OutgoingDamageContext
 	-- Unregistered damage has already landed, so there is nothing left to dodge or block
 	local recieveType = TypeDamage.RecieveTypes.Hit
@@ -279,15 +353,29 @@ function Damage:Receive(context: TypeDamage.ReceivedDamageContext): TypeDamage.O
 		-- we're in an active dodge and further damage is ignored
 		if self:_isDodging() then
 			recieveType = TypeDamage.RecieveTypes.Dodged
+		elseif self:IsParrying() then
+			-- a parry in its window takes the hit whole
+			recieveType = TypeDamage.RecieveTypes.Parried
 		elseif self:IsBlocking() then
 			-- a guard that is up takes the hit
 			recieveType = TypeDamage.RecieveTypes.Blocked
 			absorbedByBlock = true
+		elseif context.Attacker then
+			-- our attack meets theirs: neither goes through
+			local bounces = self.Base.Functions:CallFunction(
+				FunctionEnum.WouldBounce,
+				context.Attacker,
+				context.DamageType,
+				context.AttackWeight
+			)
+			if bounces then
+				recieveType = TypeDamage.RecieveTypes.Bounced
+			end
 		end
 	end
 
 	-- Only a hit that came through does its damage and carries its special. A blocked hit still connected (the attacker's
-	-- hit sound and knockback take effect), it just does nothing to us; a dodged one didn't connect at all.
+	-- hit sound and knockback take effect), it just does nothing to us; a dodged, parried or bounced one didn't connect at all.
 	local landed = recieveType == TypeDamage.RecieveTypes.Hit
 	local didHit = landed or recieveType == TypeDamage.RecieveTypes.Blocked
 	local special = if landed then self:_permittedSpecial(context.Special) else nil
@@ -303,8 +391,7 @@ function Damage:Receive(context: TypeDamage.ReceivedDamageContext): TypeDamage.O
 	-- Unregistered damage was taken in full already, there is nothing left to scale. What got past the guard is scaled by
 	-- how well this character takes its damage type, then by how much damage it takes overall.
 	if context.Registered then
-		amount *= self:_getIntakeMultiplier(context.DamageType)
-		amount *= math.max(self:_getSetting(Settings.RecieveMultiplier), 0)
+		amount = self:_scaleIncoming(amount, context.DamageType)
 		-- The hit still lands (and is announced), it just takes nothing
 		if not self:_isPermitted(Permissions.CanBeDamaged) then
 			amount = 0
@@ -327,26 +414,88 @@ function Damage:Receive(context: TypeDamage.ReceivedDamageContext): TypeDamage.O
 		Special = special,
 		StaggerDuration = staggerDuration,
 		Resisted = resisted,
+		AttackWeight = context.AttackWeight,
 	}
+
+	-- A hit that connected makes its attacker the last one, whether or not it ends up doing damage
+	if context.Registered and didHit and context.Attacker then
+		self.lastAttacker = context.Attacker
+	end
 
 	-- Registered damage hasn't touched the humanoid yet
 	if context.Registered and outgoing.Amount > 0 then
+		-- Noted before the health goes: if this is the hit that kills, the Died event can arrive before DealSelfDamage returns
+		-- or after Receive is over, and either way it finds the hit here
+		self.fatalHit = {
+			Attacker = context.Attacker,
+			Amount = outgoing.Amount,
+			DamageType = context.DamageType,
+			Special = outgoing.Special,
+		}
 		self:DealSelfDamage(outgoing.Amount)
+		if self.Humanoid.Health > 0 then
+			self.fatalHit = nil
+		end
 	end
 
 	-- Before the outcome is announced: a block that breaks on this hit is already gone by the time anyone hears of it
 	if absorbedByBlock then
-		self:_absorbWithBlock(context.Amount, context.Attacker)
+		self:_absorbWithBlock(self:GetHitCategory(context.Amount, context.AttackWeight), context.Attacker)
+	end
+
+	-- Likewise, so the parry is over by the time anyone hears of it. The task shows the rest.
+	if recieveType == TypeDamage.RecieveTypes.Parried then
+		self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Parry, TypeParry.HitReason)
+	end
+
+	-- Our side of a bounce. The attacker hears of it in the answer and sees to its own.
+	if recieveType == TypeDamage.RecieveTypes.Bounced then
+		self.Base.Functions:CallFunction(FunctionEnum.BounceAttack, context.Attacker)
 	end
 
 	self:Post(outgoing)
 
+	if recieveType == TypeDamage.RecieveTypes.Parried then
+		self:_punishParried(context)
+	end
+
 	return outgoing
 end
 
--- How heavy a hit is, by the damage it comes with: up to the LightThreshold it is light, up to the MediumThreshold medium
--- and above that heavy. The thresholds are the ones the hit reactions go by.
-function Damage:GetHitCategory(amount: number): TypeDamage.HitCategory
+-- What a hit of this amount and damage type does to this character
+function Damage:_scaleIncoming(amount: number, damageType: string?): number
+	return amount * self:_getIntakeMultiplier(damageType) * math.max(self:_getSetting(Settings.RecieveMultiplier), 0)
+end
+
+-- Sends a share of the hit we parried back to whoever made it, if we know who, as a hit of the same damage type. It is a
+-- plain hit from us like any other: a ModNPC takes it through its own Damage, so it can be resisted or dodged, and anything
+-- else with a humanoid takes the damage alone. A light hit throws them back, anything heavier launches them.
+-- Sent right away, while the attack is still waiting for our answer: what we send cancels it there, before it can pay for and
+-- announce a next hit that will never come (see the Attack task).
+function Damage:_punishParried(context: TypeDamage.ReceivedDamageContext)
+	local attacker = context.Attacker
+	if not attacker then
+		return
+	end
+
+	local light = self:GetHitCategory(context.Amount, context.AttackWeight) == HitCategories.Light
+	local special = if light then Specials.StaggerBackwards else Specials.Launch
+	local amount = self:_scaleIncoming(context.Amount, context.DamageType) * TypeParry.ReflectShare
+
+	local response = self.CharacterAPI:DealDamage(attacker, amount, context.DamageType, special)
+	local dealt = if response then response.Data else nil
+	if dealt and dealt.DidHit then
+		self.CharacterAPI:PushAway(attacker, TypeParry.ReflectKnockback)
+	end
+end
+
+-- How heavy a hit is: the weight its attack lists. The damage is only the backup, for a hit without one: up to the
+-- LightThreshold it is light, up to the MediumThreshold medium and above that heavy.
+function Damage:GetHitCategory(amount: number, attackWeight: TypeDamage.HitCategory?): TypeDamage.HitCategory
+	if attackWeight and HitCategories[attackWeight] then
+		return attackWeight
+	end
+
 	if amount <= self:_getSetting(Settings.LightThreshold) then
 		return HitCategories.Light
 	elseif amount <= self:_getSetting(Settings.MediumThreshold) then
@@ -383,12 +532,12 @@ end
 
 -- Hands a hit the block took to the Block task, which pays for it and breaks if it can't. The hit is absorbed either way.
 -- The attacker (if known) is who gets told when the guard breaks.
-function Damage:_absorbWithBlock(amount: number, attacker: Model?)
+function Damage:_absorbWithBlock(category: TypeDamage.HitCategory, attacker: Model?)
 	-- the scheduler keeps a task that just stopped in its list until it next cleans up, so only a running one is the guard
 	for _, blockTask in ipairs(self.Base.Scheduler:GetTasks(TypeTask.CategoriesEnum.Block)) do
 		if blockTask:IsRunning() then
 			local guard: any = blockTask
-			guard:Absorb(self:GetHitCategory(amount), attacker)
+			guard:Absorb(category, attacker)
 			return
 		end
 	end
@@ -417,6 +566,35 @@ function Damage:EndBlock()
 	end
 end
 
+function Damage:IsParrying(): boolean
+	return self.Base.State:Is(PARRY_STATE_KEY, ParryStateEnum.Parrying)
+end
+
+-- Takes the parry state: from now on hits are parried, and the character can't move, block or act. Refuses when the character
+-- can't parry right now (CanParry: no weapon, dead, staggered, in the middle of an attack, guarding, or already parrying).
+-- Whoever takes the state gives it back with EndParry.
+function Damage:BeginParry(): (boolean, string?)
+	local canParry, reason = self.Base.Functions:CallFunction(FunctionEnum.CanParry)
+	if not canParry then
+		return false, reason or "Cannot parry"
+	end
+
+	self.Base.State:Set(PARRY_STATE_KEY, ParryStateEnum.Parrying)
+
+	return true
+end
+
+-- The window of the parry is over: hits land again, while the character stays held until EndParry
+function Damage:CloseParry()
+	if self:IsParrying() then
+		self.Base.State:Set(PARRY_STATE_KEY, ParryStateEnum.Recovering)
+	end
+end
+
+function Damage:EndParry()
+	self.Base.State:Set(PARRY_STATE_KEY, ParryStateEnum.None)
+end
+
 function Damage:IsBlockBroken(): boolean
 	return self.Base.State:Is(BLOCK_BREAK_STATE_KEY, BlockBreakStateEnum.Active)
 end
@@ -438,6 +616,7 @@ function Damage:BreakBlock(reason: string?)
 	end
 
 	self:_showBlockBreak()
+	self.Base.Events:Dispatch(CombatEvents.BlockBroken, { Reason = reason } :: TypeCharacterEvents.BlockBroken)
 
 	-- Only the end of an exhaustion ends the break, so a character that couldn't be exhausted (a mod replaced the stamina
 	-- break) would never block again; for it the break is over at once
@@ -527,19 +706,25 @@ function Damage:Post(outgoing: TypeDamage.OutgoingDamageContext)
 	self:_applySpecial(outgoing)
 
 	-- A guard that takes a hit shows it with the block's own animation (BlockHit), not a flinch on top of it, even when
-	-- some of the damage got through
-	if outgoing.RecieveType ~= TypeDamage.RecieveTypes.Blocked then
-		self:_playReaction(outgoing.Amount)
+	-- some of the damage got through. A parry has its own too (ParryHit), and so does a bounce (the Bounce task).
+	local recieveType = outgoing.RecieveType
+	if
+		recieveType ~= TypeDamage.RecieveTypes.Blocked
+		and recieveType ~= TypeDamage.RecieveTypes.Parried
+		and recieveType ~= TypeDamage.RecieveTypes.Bounced
+	then
+		self:_playReaction(outgoing.Amount, outgoing.AttackWeight)
 	end
 end
 
--- Lets the character's listeners know how the hit went for us: it took health off, and/or it was dodged or blocked. A hit
+-- Lets the character's listeners know how the hit went for us: it took health off, and/or it was dodged, parried or blocked. A hit
 -- that landed for nothing (no damage) is neither. A blocked hit counts as a defense even though it connected, and when
--- some of its damage got through (an exhausted guard) it is announced as damage taken as well.
+-- some of its damage got through (an exhausted guard) it is announced as damage taken as well. A bounce defended nothing, it has
+-- an event of its own (AttackBounced).
 function Damage:_announceOutcome(outgoing: TypeDamage.OutgoingDamageContext)
 	local events = self.Base.Events
 
-	if outgoing.RecieveType ~= TypeDamage.RecieveTypes.Hit then
+	if outgoing.RecieveType ~= TypeDamage.RecieveTypes.Hit and outgoing.RecieveType ~= TypeDamage.RecieveTypes.Bounced then
 		events:Dispatch(CombatEvents.DefenseSucceeded, {
 			Attacker = outgoing.Attacker,
 			RecieveType = outgoing.RecieveType,
@@ -665,6 +850,11 @@ function Damage:_loseControl(state: string)
 	local functions = self.Base.Functions
 	functions:CallFunction(FunctionEnum.CancelCurrentAttack, true)
 	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Movement, "Lost control")
+	-- a hit in the recovery of a parry (it can't reach one still in its window), or during a bounce
+	self.Base.Scheduler:StopTasks(
+		{ Categories = { TypeTask.CategoriesEnum.Parry, TypeTask.CategoriesEnum.Bounce } },
+		"Lost control"
+	)
 	functions:CallFunction(FunctionEnum.StopMoving)
 end
 
@@ -704,14 +894,21 @@ function Damage:BeginLaunch(): (boolean, string?)
 		self:_breakStagger()
 	end
 	self:_loseControl(StaggerStateEnum.Launched)
+	self.Base.Events:Dispatch(CombatEvents.Launched)
 
 	return true
 end
 
-function Damage:EndLaunch()
-	if self:IsLaunched() then
-		self.Base.State:Set(STAGGER_STATE_KEY, StaggerStateEnum.None)
+-- recovered: the launch ran its course and the character is back up (the Launch task says so), rather than being cut short
+function Damage:EndLaunch(recovered: boolean?)
+	if not self:IsLaunched() then
+		return
 	end
+
+	self.Base.State:Set(STAGGER_STATE_KEY, StaggerStateEnum.None)
+	self.Base.Events:Dispatch(CombatEvents.LaunchEnded, {
+		Recovered = recovered == true,
+	} :: TypeCharacterEvents.LaunchEnded)
 end
 
 -- Ends the stagger the character is in, whichever kind it is, so the state is free to be taken
@@ -773,16 +970,12 @@ function Damage:_staggerBackwards()
 end
 
 -- The reaction category for the damage we took, nil when it was too little to react to
-function Damage:_reactionCategoryFor(amount: number): string?
+function Damage:_reactionCategoryFor(amount: number, attackWeight: TypeDamage.HitCategory?): string?
 	if amount < self:_getSetting(Settings.MinReactionThreshold) then
 		return nil
-	elseif amount <= self:_getSetting(Settings.LightThreshold) then
-		return AnimationCategories.Light
-	elseif amount <= self:_getSetting(Settings.MediumThreshold) then
-		return AnimationCategories.Medium
 	end
 
-	return AnimationCategories.Heavy
+	return AnimationCategories[self:GetHitCategory(amount, attackWeight)]
 end
 
 -- Whether a hit of this category tries to interrupt the attack being made. Medium and heavy hits do for now; once
@@ -793,8 +986,8 @@ end
 
 -- Plays a random animation of the category the damage falls in. A blocked hit has an amount of 0, so it never gets here.
 -- Runs from Post, which is a runtime path, so going through CallFunction is safe.
-function Damage:_playReaction(amount: number)
-	local categoryName = self:_reactionCategoryFor(amount)
+function Damage:_playReaction(amount: number, attackWeight: TypeDamage.HitCategory?)
+	local categoryName = self:_reactionCategoryFor(amount, attackWeight)
 	if not categoryName then
 		return
 	end

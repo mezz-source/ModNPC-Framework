@@ -159,6 +159,10 @@ local function validateSpec(spec: any, now: number): string?
 		return "Stimulant Position must be a Vector3"
 	end
 
+	if spec.Lingers ~= nil and type(spec.Lingers) ~= "boolean" then
+		return "Stimulant Lingers must be a boolean"
+	end
+
 	return nil
 end
 
@@ -234,7 +238,8 @@ function Stimulants.emit(emitter: Model?, recipient: Recipient, spec: StimulantS
 			ExpiresAt = stimulant.ExpiresAt,
 		}
 
-		if emitter then
+		-- A lingering stimulant isn't tied to its emitter: it is not retracted when the emitter is removed
+		if emitter and not spec.Lingers then
 			local emitterIds = byEmitter[emitter]
 			if not emitterIds then
 				emitterIds = {}

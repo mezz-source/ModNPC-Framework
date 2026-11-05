@@ -14,6 +14,9 @@ local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePe
 
 -- How the character meets the hits it sees coming. An attacker warns its target of each hit with an IncomingAttack
 -- stimulant that lasts until the hit lands; on the reaction tick that finds it queued we consume it and decide, once per hit:
+--   first of all, a character that can parry (its guard is down) and pay for it rolls its Intellect, and if that is made it
+--   parries (Parry). The
+--   parry is timed to start just before the hit (PARRY_LEAD), so its window covers the moment it lands, however slow the swing.
 --   a guard that is already up keeps taking hits as long as it can pay for one this heavy (Guarded)
 --   otherwise, with enough time left to get a dodge off (DodgeReactionTime) and an Agility roll made, we dodge. The dodge is
 --   timed to go off just before the hit (DODGE_LEAD), so its active span covers the moment it lands.
@@ -47,6 +50,8 @@ local DefenseStateEnum = TypeState.DefenseStateEnum
 
 -- The skills a dodge is rolled against
 local DODGE_SKILLS: { TypeSkills.Skill } = { Skills.Agility }
+-- The skill a parry is rolled against
+local PARRY_SKILL: TypeSkills.Skill = Skills.Intellect
 
 -- What a setting of Config/Defense is when the folder doesn't have it (see TypeDefense.Settings)
 local SETTING_DEFAULTS: { [string]: number } = table.freeze({
@@ -59,6 +64,8 @@ local SETTING_DEFAULTS: { [string]: number } = table.freeze({
 -- Seconds before the hit the dodge goes off: inside the dodge's active span (0.3s, see Movement) with room either side, so
 -- a hit landing a little early or late is still inside it
 local DODGE_LEAD = 0.12
+-- Seconds before the hit a parry starts: the middle of its window (the 0.3s up to its ParryEnd marker), with room either side
+local PARRY_LEAD = 0.15
 -- Seconds a last moment guard stays up once the hit it was raised for is over, so a combo's next hit (warned as the previous
 -- one lands) still finds it up
 local GUARD_HOLD = 0.35
@@ -88,8 +95,8 @@ function Defense.new(Base: any, character: Model)
 
 	-- Stimulant id -> os.clock time until which we are dealing with that hit. Reacting while it has anything left.
 	self.awaiting = {} :: { [number]: number }
-	-- Stimulant id -> the thread that dodges it
-	self.pendingDodges = {} :: { [number]: thread }
+	-- Stimulant id -> the thread that dodges or parries it
+	self.pendingReactions = {} :: { [number]: thread }
 	-- Stimulant id -> the hits we dodged, until they are over: who from, when it was due, and whether Damage told of the
 	-- outcome itself
 	self.dodged = {} :: { [number]: { Attacker: Model?, HitAt: number, Resolved: boolean } }
@@ -201,6 +208,10 @@ function Defense:_decide(stimulant: StimulantEvent, timeLeft: number): (TypeDefe
 		return Reactions.None, "Too late"
 	end
 
+	if not self:_tryParry(stimulant, timeLeft) then
+		return Reactions.Parry
+	end
+
 	local functions = self.Base.Functions
 	local blockCost = self:_getBlockCost(stimulant)
 
@@ -223,12 +234,86 @@ function Defense:_decide(stimulant: StimulantEvent, timeLeft: number): (TypeDefe
 	return Reactions.None, dodgeReason .. ", " .. blockReason
 end
 
+-- Commits to parrying the hit, if the character can, can pay for it, and its Intellect roll is made. Asked before the roll, so
+-- one that can't parry doesn't roll for it. Returns why not, or nil when the parry is on its way.
+function Defense:_tryParry(stimulant: StimulantEvent, timeLeft: number): string?
+	local functions = self.Base.Functions
+	local canParry, reason = functions:CallFunction(FunctionEnum.CanParry)
+	if not canParry then
+		return reason or "Cannot parry"
+	end
+	if not functions:CallFunction(FunctionEnum.CanAffordStamina, TypeStamina.Costs.Parry) then
+		return "Cannot afford to parry"
+	end
+
+	if not functions:CallFunction(FunctionEnum.RollSkill, PARRY_SKILL).Success then
+		return "Parry roll failed"
+	end
+
+	local delay = timeLeft - PARRY_LEAD
+	if delay <= 0 then
+		return self:_startParry()
+	end
+
+	self:_scheduleParry(stimulant, delay)
+
+	return nil
+end
+
+-- Starts the Parry task, which pays for it. Returns why not, or nil when it has started.
+function Defense:_startParry(): string?
+	local parry, createError = self.Base.CharacterTasks.Parry.new()
+	if not parry then
+		return "Could not create parry: " .. tostring(createError)
+	end
+	local started, startError = self.Base.Scheduler:Start(parry)
+	if not started then
+		return "Could not start parry: " .. tostring(startError)
+	end
+
+	return nil
+end
+
+-- The parry goes off PARRY_LEAD before the hit. It is paid for only then, so a hit that is called off meanwhile costs nothing.
+-- A parry refused at that moment (staggered meanwhile, out of stamina) falls back to a last moment guard.
+function Defense:_scheduleParry(stimulant: StimulantEvent, delay: number)
+	local id = stimulant.Id
+
+	self.awaiting[id] = os.clock() + delay
+	self.pendingReactions[id] = task.delay(delay, function()
+		self.pendingReactions[id] = nil
+		self.awaiting[id] = nil
+		if not self.Base or not self.Base:IsAlive() then
+			return
+		end
+
+		local reason = self:_startParry()
+		if reason then
+			self:_fallBackToGuard(stimulant, "Parry refused: " .. reason)
+		end
+
+		self:_refresh()
+	end)
+end
+
+-- A reaction that was on its way was refused as it went off: a last moment guard is what is left, and it is announced anew
+function Defense:_fallBackToGuard(stimulant: StimulantEvent, why: string)
+	local left = stimulant.ExpiresAt - os.clock()
+	local blockReason = self:_raiseGuard(stimulant, left)
+	if blockReason then
+		self:_announce(stimulant, Reactions.None, left, why .. ", " .. blockReason)
+	else
+		self:_announce(stimulant, Reactions.Block, left, why)
+	end
+end
+
 -- What holding a guard against the hit costs, by its weight. The weight is the one the guard will be charged by: the
 -- damage the attacker says the hit comes with (see Damage:GetHitCategory).
 function Defense:_getBlockCost(stimulant: StimulantEvent): TypeStamina.Cost
 	local data = stimulant.Data
 	local damage = if type(data) == "table" and type(data.BaseDamage) == "number" then data.BaseDamage else math.huge
-	local category = self.Base.Functions:CallFunction(FunctionEnum.GetHitCategory, damage)
+	local weight = if type(data) == "table" then data.AttackWeight else nil
+	local category = self.Base.Functions:CallFunction(FunctionEnum.GetHitCategory, damage, weight)
 
 	return TypeBlock.HitCosts[category] or TypeBlock.HitCosts.Heavy
 end
@@ -291,8 +376,8 @@ function Defense:_scheduleDodge(stimulant: StimulantEvent, timeLeft: number)
 	local direction = self:_pickDodgeDirection()
 
 	self.awaiting[id] = os.clock() + delay
-	self.pendingDodges[id] = task.delay(delay, function()
-		self.pendingDodges[id] = nil
+	self.pendingReactions[id] = task.delay(delay, function()
+		self.pendingReactions[id] = nil
 		self.awaiting[id] = nil
 		if not self.Base or not self.Base:IsAlive() then
 			return
@@ -302,14 +387,7 @@ function Defense:_scheduleDodge(stimulant: StimulantEvent, timeLeft: number)
 		if dodged then
 			self.dodged[id] = { Attacker = stimulant.Source, HitAt = stimulant.ExpiresAt, Resolved = false }
 		else
-			local left = stimulant.ExpiresAt - os.clock()
-			local blockReason = self:_raiseGuard(stimulant, left)
-			local why = "Dodge refused: " .. tostring(reason)
-			if blockReason then
-				self:_announce(stimulant, Reactions.None, left, why .. ", " .. blockReason)
-			else
-				self:_announce(stimulant, Reactions.Block, left, why)
-			end
+			self:_fallBackToGuard(stimulant, "Dodge refused: " .. tostring(reason))
 		end
 
 		self:_refresh()
@@ -387,16 +465,16 @@ function Defense:_keepGuard(stimulant: StimulantEvent)
 	self.awaiting[stimulant.Id] = stimulant.ExpiresAt + GUARD_HOLD
 end
 
--- The hit won't come: its attack was cut short. A dodge still waiting for it is called off, a dodge already made for it
+-- The hit won't come: its attack was cut short. A dodge or parry still waiting for it is called off, a dodge already made for it
 -- avoided nothing, and a guard raised for it stays up only a moment longer.
 function Defense:_onRetracted(id: any)
 	if type(id) ~= "number" then
 		return
 	end
 
-	local thread = self.pendingDodges[id]
+	local thread = self.pendingReactions[id]
 	if thread then
-		self.pendingDodges[id] = nil
+		self.pendingReactions[id] = nil
 		task.cancel(thread)
 	end
 	self.awaiting[id] = nil
@@ -436,7 +514,7 @@ function Defense:_refresh()
 	end
 
 	for id, untilTime in self.awaiting do
-		if untilTime <= now and not self.pendingDodges[id] then
+		if untilTime <= now and not self.pendingReactions[id] then
 			self.awaiting[id] = nil
 		end
 	end
@@ -456,16 +534,16 @@ function Defense:_refresh()
 	self.State:Set(DEFENSE_STATE_KEY, if reacting then DefenseStateEnum.Reacting else DefenseStateEnum.None)
 end
 
--- Whether a reaction to a hit is under way (a dodge waiting for it, a guard held for it)
+-- Whether a reaction to a hit is under way (a dodge or parry waiting for it, a guard held for it)
 function Defense:IsReacting(): boolean
 	return self.State:Is(DEFENSE_STATE_KEY, DefenseStateEnum.Reacting)
 end
 
 function Defense:_clear()
-	for _, thread in self.pendingDodges do
+	for _, thread in self.pendingReactions do
 		task.cancel(thread)
 	end
-	self.pendingDodges = {}
+	self.pendingReactions = {}
 	self.dodged = {}
 	self.awaiting = {}
 	self.guard = nil

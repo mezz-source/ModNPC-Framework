@@ -1,6 +1,7 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local TypeAttack = require(ServerScriptService.ModNPCServer.Types.v1.TypeAttack)
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
+local TypeDamage = require(ServerScriptService.ModNPCServer.Types.v1.TypeDamage)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
@@ -11,6 +12,7 @@ Attacks.__index = Attacks
 
 local ContentEvents = TypeCharacterEvents.Names.Content
 local StateEvents = TypeCharacterEvents.Names.State
+local CombatEvents = TypeCharacterEvents.Names.Combat
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 
 local AttackTypes = TypeAttack.AttackTypes
@@ -21,6 +23,8 @@ local ANIMATION_PRIORITY = Enum.AnimationPriority.Action3
 
 local ATTACK_STATE_KEY = TypeState.Keys.AttackState
 local AttackStateEnum = TypeState.AttackStateEnum
+local BOUNCE_STATE_KEY = TypeState.Keys.BounceState
+local BounceStateEnum = TypeState.BounceStateEnum
 
 function Attacks.new(Base: any, character: Model)
 	local self = setmetatable({}, Attacks)
@@ -29,6 +33,8 @@ function Attacks.new(Base: any, character: Model)
 	self.CharacterAPI = Base.CharacterAPI
 	-- Swinging from the moment an attack starts until its debounce is over, owned by the attack task
 	Base.State:Register(ATTACK_STATE_KEY, AttackStateEnum)
+	-- Bouncing from the moment an attack bounces until the bounce animation ends, owned by the bounce task
+	Base.State:Register(BOUNCE_STATE_KEY, BounceStateEnum)
 	-- The attacks of each content source, keyed by source. A weapon's attacks only exist while it is equipped.
 	self.Sources = { [Base.Assets.BaseSource] = self.CharacterAPI:GetAttacksIndex() or {} } :: {
 		[TypeCDN.ContentSource]: TypeAttack.AttackIndex,
@@ -329,14 +335,15 @@ function Attacks:ClearDesiredAttack()
 end
 
 -- Whether the character could pay for the attack's first hit right now, which is what it takes to start it (the later hits
--- of a combo are paid for as the combo goes on, see the attack task). If it couldn't, why.
-function Attacks:CanAffordAttack(attack: TypeAttack.AttackData): (boolean, string?)
+-- of a combo are paid for as the combo goes on, see the attack task). The price depends on the source the attack comes from.
+-- If it couldn't, why.
+function Attacks:CanAffordAttack(attack: TypeAttack.AttackData, source: TypeCDN.ContentSource): (boolean, string?)
 	local cost = TypeAttack.WeightCosts[attack.Hits[1].AttackWeight]
 	if not cost then
 		return false, "Unknown attack weight: " .. tostring(attack.Hits[1].AttackWeight)
 	end
 
-	return self.Base.Functions:CallFunction(FunctionEnum.CanAffordStamina, cost)
+	return self.Base.Functions:CallFunction(FunctionEnum.CanAffordStamina, cost, nil, source)
 end
 
 function Attacks:FindMeleeAttack(source: TypeCDN.ContentSource?): (TypeAttack.AttackData?, TypeCDN.ContentSource?)
@@ -391,7 +398,7 @@ function Attacks:Attack(
 	end
 
 	-- Before the guard is dropped below: an attack the character can't pay for must leave it as it was
-	local affordable, declinedReason = self:CanAffordAttack(attack)
+	local affordable, declinedReason = self:CanAffordAttack(attack, attackSource)
 	if not affordable then
 		return false, declinedReason or "Cannot afford the attack"
 	end
@@ -448,6 +455,52 @@ function Attacks:CancelCurrentAttack(force: boolean?): (boolean, string?)
 	end
 
 	return self.Base.Scheduler:Stop(attackTask, "Attack interrupted"), nil
+end
+
+-- Whether a hit from `attacker` would bounce off the attack being made: that attack is aimed at them, and the hit it is on has
+-- the same damage type and weight. An attack that has played out its last hit is only following through, there is nothing
+-- left of it to meet. A hit without a weight (a parry's reflection) isn't an attack's and meets nothing.
+function Attacks:WouldBounce(
+	attacker: Model,
+	damageType: TypeDamage.DamageType?,
+	attackWeight: TypeDamage.HitCategory?
+): boolean
+	local attackTask = self.CurrentAttackTask
+	if not attackTask or attackWeight == nil or attackTask.Context.Target ~= attacker then
+		return false
+	end
+
+	local hit = attackTask:GetCurrentHit()
+	return hit ~= nil and hit.DamageType == damageType and hit.AttackWeight == attackWeight
+end
+
+-- The attack being made bounced off one of `opponent`: every attack ends, whether or not it allows interrupts, and the Bounce
+-- task takes over. Both characters of a bounce come here. Two hits landing at once make each hear of it twice, and only
+-- the first counts: impulses add up.
+function Attacks:BounceAttack(opponent: Model?): (boolean, string?)
+	if self.Base.State:Is(BOUNCE_STATE_KEY, BounceStateEnum.Bouncing) then
+		return false, "Already bouncing"
+	end
+
+	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Attack, "Bounced")
+
+	local bounceTask, createError = self.Base.CharacterTasks.Bounce.new()
+	if not bounceTask then
+		warn("Bounce could not create task:", createError)
+		return false, createError
+	end
+
+	local started, startError = self.Base.Scheduler:Start(bounceTask)
+	if not started then
+		warn("Bounce could not start task:", startError)
+		return false, startError
+	end
+
+	self.Base.Events:Dispatch(CombatEvents.AttackBounced, {
+		Opponent = opponent,
+	} :: TypeCharacterEvents.AttackBounced)
+
+	return true
 end
 
 -- The attacks below only differ in the kind of attack they make. All of them go for the current focus target.

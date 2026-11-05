@@ -3,10 +3,14 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
+local TypeVFX = require(ServerScriptService.ModNPCServer.Types.v1.TypeVFX)
 local CharacterUtility = require(script.Parent.CharacterUtility)
+local Weapon = require(script.Parent.Weapon)
+local ParticleClass = require(script.Particle)
 local VFX = {}
 
 type VFXData = TypeCDN.VFXData
+type ParticleEmitterData = TypeCDN.ParticleEmitterData
 
 -- Cleanup waits this long past the last moment an effect can still be seen, so its final particles aren't cut off
 local CLEANUP_PADDING = 0.25
@@ -91,14 +95,16 @@ local function spawnVFX(effect: VFXData, destination: BasePart): Instance
 	return clone
 end
 
--- A part is used as it is. A character resolves to its root part here, so callers playing an effect on a character
--- don't need a request of their own to find it.
+-- A part is used as it is. A model resolves to its PrimaryPart (a character's root part), and a weapon, whose container
+-- has none, to the part of its WeaponModel. Callers just pass what they hold, without a request of their own to find it.
 local function resolveDestination(destination: any): BasePart?
 	if typeof(destination) ~= "Instance" then
 		return nil
 	end
 
-	local part = if destination:IsA("Model") then CharacterUtility._getRootPart(destination) else destination
+	local part = if destination:IsA("Model")
+		then CharacterUtility._getRootPart(destination) or Weapon._getPart(destination)
+		else destination
 	if not part or not part:IsA("BasePart") or part.Parent == nil then
 		return nil
 	end
@@ -108,7 +114,7 @@ end
 
 -- Plays every effect at the destination: each is cloned onto it, emitted (EmitCount, 1 by default) and, when it has
 -- an EnableTime, enabled for that many seconds. The clones clean themselves up once they are done.
--- The destination is a part in the world, or a character, whose root part is used.
+-- The destination is a part in the world, or a model (a character, a weapon) that resolves to its part.
 -- Data is the list of clones created. An effect that cannot be played is warned about and skipped.
 function VFX.playVFX(
 	character: Model,
@@ -124,7 +130,7 @@ function VFX.playVFX(
 		return response(
 			false,
 			TypeRequests.Enums.StatusCode.MalformedRequest,
-			"Destination must be a BasePart in the world, or a character with a root part"
+			"Destination must be a BasePart in the world, or a model with a PrimaryPart, or a weapon"
 		)
 	end
 
@@ -145,6 +151,86 @@ function VFX.playVFX(
 	end
 
 	return response(true, TypeRequests.Enums.StatusCode.Success, "VFX playing", spawned)
+end
+
+-- A fixed spot in the world has no part to hold the emitter, so it gets an attachment on Terrain, which sits at the world
+-- origin: the attachment's CFrame is its world CFrame. Nil for anything that isn't a spot in the world.
+local function makeWorldAnchor(location: any, effectName: string): Attachment?
+	local locationType = typeof(location)
+	if locationType ~= "Vector3" and locationType ~= "CFrame" then
+		return nil
+	end
+
+	local anchor = Instance.new("Attachment")
+	anchor.Name = effectName .. "Anchor"
+	anchor.CFrame = if locationType == "Vector3" then CFrame.new(location) else location
+	anchor.Parent = workspace.Terrain
+	return anchor
+end
+
+-- Makes a particle that stays at the location until it is destroyed. Unlike playVFX nothing happens on its own: it starts
+-- disabled with nothing emitted, and EnableTime is not used. Data is the particle: a table of methods that drives it
+-- directly, so nothing needs to be requested to emit, enable or disable it.
+-- The location is a part, a model that resolves to its part, or a Vector3/CFrame in the world. The particle ends with the
+-- part it is on or the character that made it, so one left at a spot in the world can't outlive its character.
+function VFX.createParticle(
+	character: Model,
+	effect: ParticleEmitterData,
+	location: TypeVFX.ParticleLocation
+): TypeModuleResponse.ModuleResponse
+	if typeof(character) ~= "Instance" or not character:IsA("Model") then
+		return response(false, TypeRequests.Enums.StatusCode.MalformedRequest, "Character must be a Model")
+	end
+
+	local invalidReason = validateVFXData(effect)
+	if invalidReason then
+		return response(false, TypeRequests.Enums.StatusCode.MalformedRequest, "Invalid VFX data: " .. invalidReason)
+	end
+
+	if effect.Type ~= "ParticleEmitter" then
+		return response(false, TypeRequests.Enums.StatusCode.MalformedRequest, "A particle needs a ParticleEmitter effect")
+	end
+
+	local anchor = makeWorldAnchor(location, effect.Name)
+	local parent = anchor or resolveDestination(location)
+	if not parent then
+		return response(
+			false,
+			TypeRequests.Enums.StatusCode.MalformedRequest,
+			"Location must be a Vector3, a CFrame, a BasePart in the world, a model with a PrimaryPart, or a weapon"
+		)
+	end
+
+	local emitter = effect.Template:Clone()
+	emitter.Enabled = false
+	emitter.Parent = parent
+
+	return response(
+		true,
+		TypeRequests.Enums.StatusCode.Success,
+		"Particle created",
+		ParticleClass.new(emitter, effect.EmitCount, character, anchor)
+	)
+end
+
+-- Turns the weapon's trail on or off. A weapon that doesn't use one is left alone and that is still a success, so callers
+-- don't have to know which weapons do. The weapon isn't checked against a character: one dropped mid swing is nobody's
+-- anymore, and its trail still has to go off.
+function VFX.setWeaponTrail(weapon: Instance, enabled: boolean): TypeModuleResponse.ModuleResponse
+	if typeof(enabled) ~= "boolean" then
+		return response(false, TypeRequests.Enums.StatusCode.MalformedRequest, "Enabled must be a boolean")
+	end
+
+	local trail, problem = Weapon._getTrail(weapon)
+	if problem then
+		return response(false, TypeRequests.Enums.StatusCode.NotFound, problem)
+	end
+
+	if trail then
+		trail.Enabled = enabled
+	end
+
+	return response(true, TypeRequests.Enums.StatusCode.Success, "Weapon trail set")
 end
 
 function VFX.init(_)

@@ -65,7 +65,7 @@ function Board.new(gui: BillboardGui, options: BoardOptions?): Board
 		TextSize = textSize,
 		MaxWidth = pixelLineHeight * lineWidth / lineHeight,
 		LineHeight = pixelLineHeight,
-		Alignment = opts.Alignment or Enum.TextXAlignment.Center,
+		Alignment = opts.Alignment or Enum.TextXAlignment.Left,
 	})
 	local measure = Layout.newMeasurer(settings)
 
@@ -139,7 +139,7 @@ function Board.new(gui: BillboardGui, options: BoardOptions?): Board
 		return UDim2.fromScale(dx / settings.MaxWidth, dy / pixelLineHeight)
 	end
 
-	function board.AddLetter(glyph: Glyph): TextLabel
+	function board.AddLetter(glyph: Glyph, color: Color3?): TextLabel
 		assert(not destroyed, "Board is destroyed")
 		while lastLine < glyph.Line do
 			board.AddLine()
@@ -153,7 +153,7 @@ function Board.new(gui: BillboardGui, options: BoardOptions?): Board
 		letter.LayoutOrder = glyph.Index
 		letter.Text = glyph.Char
 		letter.FontFace = Layout.fontFor(settings, glyph.Style.Bold, glyph.Style.Italic)
-		letter.TextColor3 = glyph.Style.Color or letterRef.TextColor3
+		letter.TextColor3 = glyph.Style.Color or color or letterRef.TextColor3
 		letter.Position = board.RestPosition(glyph)
 		letter.Size = UDim2.fromScale((glyph.Width + textSize) / settings.MaxWidth, textSize / pixelLineHeight)
 		letter.Visible = true

@@ -1,18 +1,21 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local TypeAttack = require(ServerScriptService.ModNPCServer.Types.v1.TypeAttack)
 local TypeBars = require(ServerScriptService.ModNPCServer.Types.v1.TypeBars)
+local TypeDialogueFrame = require(ServerScriptService.ModNPCServer.Types.v1.TypeDialogueFrame)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeDamage = require(ServerScriptService.ModNPCServer.Types.v1.TypeDamage)
 local TypeDefense = require(ServerScriptService.ModNPCServer.Types.v1.TypeDefense)
 local TypeDisposition = require(ServerScriptService.ModNPCServer.Types.v1.TypeDisposition)
 local TypeDistance = require(ServerScriptService.ModNPCServer.Types.v1.TypeDistance)
+local TypeFriends = require(ServerScriptService.ModNPCServer.Types.v1.TypeFriends)
 local TypeHighlights = require(ServerScriptService.ModNPCServer.Types.v1.TypeHighlights)
 local TypeMovement = require(ServerScriptService.ModNPCServer.Types.v1.TypeMovement)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
 local TypeSkills = require(ServerScriptService.ModNPCServer.Types.v1.TypeSkills)
 local TypeSound = require(ServerScriptService.ModNPCServer.Types.v1.TypeSound)
 local TypeStamina = require(ServerScriptService.ModNPCServer.Types.v1.TypeStamina)
+local TypeVFX = require(ServerScriptService.ModNPCServer.Types.v1.TypeVFX)
 local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
 local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStimulant)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
@@ -25,6 +28,16 @@ export type SubscribePosition = "First" | "Last" | "Replace"
 
 export type FunctionCallbacks = {
 	GetTargets: (...any) -> ...any,
+	GetTeammates: () -> { TypeTargetting.TargettingContext },
+	IsTeammate: (character: Model) -> boolean,
+	GetTeammateDistance: (character: Model) -> number?,
+	GetFriends: () -> { TypeFriends.FriendContext },
+	GetNearbyFriends: () -> { TypeFriends.FriendContext },
+	IsFriend: (character: Model) -> boolean,
+	-- Asks a character to connect, and takes it on as a friend if it accepts
+	RequestFriend: (character: Model) -> TypeFriends.FriendOutcome,
+	-- Another character asked us to connect (the API calls it). Anything but Accepted is a decline.
+	ReceiveFriendRequest: (request: TypeFriends.FriendRequest) -> TypeFriends.FriendOutcome,
 	Wander: (...any) -> ...any,
 	Move: (direction: TypeMovement.MovementDirection) -> ...any,
 	AttackCurrentTarget: () -> (boolean, string?),
@@ -33,10 +46,12 @@ export type FunctionCallbacks = {
 	PickDesiredAttack: (attackType: TypeAttack.AttackType) -> (TypeAttack.AttackData?, TypeCDN.ContentSource?),
 	GetDesiredAttack: () -> (TypeAttack.AttackData?, TypeCDN.ContentSource?),
 	ClearDesiredAttack: () -> (),
-	CanAffordAttack: (attack: TypeAttack.AttackData) -> (boolean, string?),
+	CanAffordAttack: (attack: TypeAttack.AttackData, source: TypeCDN.ContentSource) -> (boolean, string?),
 	IsReadyToAttack: () -> boolean,
 	IsPressingOn: () -> boolean,
 	CancelCurrentAttack: (force: boolean?) -> (boolean, string?),
+	WouldBounce: (attacker: Model, damageType: TypeDamage.DamageType?, attackWeight: TypeDamage.HitCategory?) -> boolean,
+	BounceAttack: (opponent: Model?) -> (boolean, string?),
 	StartSprinting: () -> ...any,
 	StopSprinting: () -> ...any,
 	Jump: () -> ...any,
@@ -73,6 +88,11 @@ export type FunctionCallbacks = {
 	PlaySoundCategory: (prefix: string, playbackSpeed: number?) -> boolean,
 	PlayVFX: (vfxName: string, destination: BasePart | Model, source: TypeCDN.ContentSource?) -> boolean,
 	PlayVFXGroup: (groupName: string, destination: BasePart | Model, source: TypeCDN.ContentSource?) -> boolean,
+	CreateParticle: (
+		vfxName: string,
+		location: TypeVFX.ParticleLocation,
+		source: TypeCDN.ContentSource?
+	) -> TypeVFX.Particle?,
 	LoadAnimation: (
 		animationAsset: { AnimationId: string },
 		animationName: string,
@@ -98,7 +118,7 @@ export type FunctionCallbacks = {
 	BeginStagger: () -> (boolean, string?),
 	EndStagger: () -> (),
 	BeginLaunch: () -> (boolean, string?),
-	EndLaunch: () -> (),
+	EndLaunch: (recovered: boolean?) -> (),
 	GetSkillLevel: (skill: TypeSkills.Skill) -> number,
 	GetSkillChance: (skills: { TypeSkills.Skill }) -> number,
 	RollSkill: (skill: TypeSkills.Skill) -> TypeSkills.RollResult,
@@ -115,14 +135,27 @@ export type FunctionCallbacks = {
 	EndBlock: () -> (),
 	BreakBlock: (reason: string?) -> (),
 	IsBlockBroken: () -> boolean,
-	GetHitCategory: (amount: number) -> TypeDamage.HitCategory,
+	CanParry: () -> (boolean, string?),
+	IsParrying: () -> boolean,
+	BeginParry: () -> (boolean, string?),
+	CloseParry: () -> (),
+	EndParry: () -> (),
+	GetHitCategory: (amount: number, attackWeight: TypeDamage.HitCategory?) -> TypeDamage.HitCategory,
 	ReactToIncomingAttack: (stimulant: TypeStimulant.StimulantEvent) -> (TypeDefense.Reaction, string?),
 	GetStamina: () -> (number, number),
-	GetStaminaCost: (cost: TypeStamina.Cost) -> number?,
+	GetStaminaCost: (cost: TypeStamina.Cost, source: TypeCDN.ContentSource?) -> number?,
 	GetStaminaEfficiency: () -> number,
 	IsExhausted: () -> boolean,
-	CanAffordStamina: (cost: TypeStamina.Cost, requireRested: boolean?) -> (boolean, string?),
-	PurchaseStamina: (cost: TypeStamina.Cost, requireRested: boolean?) -> (boolean, string?),
+	CanAffordStamina: (
+		cost: TypeStamina.Cost,
+		requireRested: boolean?,
+		source: TypeCDN.ContentSource?
+	) -> (boolean, string?),
+	PurchaseStamina: (
+		cost: TypeStamina.Cost,
+		requireRested: boolean?,
+		source: TypeCDN.ContentSource?
+	) -> (boolean, string?),
 	SpendStamina: (amount: number, reason: string?, requireRested: boolean?) -> (boolean, string?),
 	RestoreStamina: (amount: number, reason: string?) -> (boolean, string?),
 	BreakStamina: (reason: string?) -> (boolean, string?),
@@ -131,6 +164,12 @@ export type FunctionCallbacks = {
 	GetStimulants: (name: string?) -> { TypeStimulant.StimulantEvent },
 	PeekStimulant: (name: string?) -> TypeStimulant.StimulantEvent?,
 	ConsumeStimulant: (id: number) -> TypeStimulant.StimulantEvent?,
+	-- Says a random line of a category (never Conversations) at its configured priority; true if it is playing
+	SayLine: (category: string, data: TypeDialogueFrame.SayData?) -> boolean,
+	-- After one of our attacks: a CombatBanterStart line (chattiness rolled), then the target is asked to answer
+	StartBanter: (target: Model?) -> boolean,
+	-- Another character's banter reached us (the API calls it): a CombatBanterRespond line, if the rules allow
+	BanterRespond: (starter: Model?) -> boolean,
 }
 
 export type CharacterTasks = {
@@ -168,6 +207,15 @@ export type CharacterTasks = {
 		new: (upwardImpulse: number, backwardImpulse: number) -> (TypeTask.Task?, string?),
 	},
 	Block: {
+		new: TypeTask.TaskConstructor,
+	},
+	Parry: {
+		new: TypeTask.TaskConstructor,
+	},
+	Bounce: {
+		new: TypeTask.TaskConstructor,
+	},
+	DialogueBark: {
 		new: TypeTask.TaskConstructor,
 	},
 }
@@ -252,7 +300,8 @@ export type CharacterAPI = {
 		amount: number,
 		damageType: TypeDamage.DamageType?,
 		special: TypeDamage.DamageSpecial?,
-		maxStaggerTime: number?
+		maxStaggerTime: number?,
+		attackWeight: TypeDamage.HitCategory?
 	) -> TypeRequests.CharacterResponse,
 	LoadSounds: (self: CharacterAPI, sounds: { TypeCDN.SoundData }) -> TypeSound.SoundLoadResult?,
 	PlaySound: (self: CharacterAPI, soundName: string, soundList: TypeSound.SoundList) -> (),
@@ -267,9 +316,20 @@ export type CharacterAPI = {
 	StopSoundsByPrefix: (self: CharacterAPI, prefix: string, soundList: TypeSound.SoundList) -> (),
 	UnloadAllSounds: (self: CharacterAPI, soundList: TypeSound.SoundList) -> (),
 	PlayVFX: (self: CharacterAPI, effects: { TypeCDN.VFXData }, destination: BasePart | Model) -> { Instance }?,
+	CreateParticle: (
+		self: CharacterAPI,
+		effect: TypeCDN.ParticleEmitterData,
+		location: TypeVFX.ParticleLocation
+	) -> TypeVFX.Particle?,
+	SetWeaponTrail: (self: CharacterAPI, weapon: Instance, enabled: boolean) -> (),
 	CreateBar: (self: CharacterAPI, barName: string, options: TypeBars.BarOptions?) -> TypeBars.Bar?,
 	GetBar: (self: CharacterAPI, barName: string) -> TypeBars.Bar?,
 	RemoveBar: (self: CharacterAPI, barName: string) -> boolean,
+	CreateDialogueFrame: (self: CharacterAPI, options: TypeDialogueFrame.FrameOptions?) -> TypeDialogueFrame.Frame?,
+	GetDialogueFrame: (self: CharacterAPI) -> TypeDialogueFrame.Frame?,
+	RemoveDialogueFrame: (self: CharacterAPI) -> boolean,
+	RequestBanterResponse: (self: CharacterAPI, target: Model) -> boolean,
+	RequestFriend: (self: CharacterAPI, target: Model) -> TypeFriends.FriendOutcome,
 	CreateHighlight: (
 		self: CharacterAPI,
 		highlightName: string,
@@ -402,6 +462,30 @@ export type Dialogue = {
 	GetData: (self: Dialogue) -> any,
 	GetLines: (self: Dialogue, categoryName: string) -> any,
 	GetConversation: (self: Dialogue, categoryName: string, conversationName: string) -> any,
+	GetFrame: (self: Dialogue) -> TypeDialogueFrame.Frame?,
+	GetPriority: (self: Dialogue, category: string) -> TypeDialogueFrame.Priority,
+	GetCooldown: (self: Dialogue, category: string) -> number,
+	GetCooldownRemaining: (self: Dialogue, category: string) -> number,
+	IsOnCooldown: (self: Dialogue, category: string) -> boolean,
+	GetMaxRandomDelay: (self: Dialogue, category: string) -> number,
+	RollDelay: (self: Dialogue, category: string) -> number,
+	GetChattiness: (self: Dialogue) -> number,
+	RollChattiness: (self: Dialogue) -> boolean,
+	CanPlay: (self: Dialogue, priority: TypeDialogueFrame.Priority) -> boolean,
+	Play: (
+		self: Dialogue,
+		texts: { string },
+		priority: TypeDialogueFrame.Priority,
+		options: TypeDialogueFrame.LineOptions?
+	) -> boolean,
+	SayLine: (self: Dialogue, category: string, data: TypeDialogueFrame.SayData?) -> boolean,
+	StartBanter: (self: Dialogue, target: Model?) -> boolean,
+	BanterRespond: (self: Dialogue, starter: Model?) -> boolean,
+	Queue: (self: Dialogue, text: string, options: TypeDialogueFrame.LineOptions?) -> number,
+	Cancel: (self: Dialogue, id: number) -> boolean,
+	CancelCurrent: (self: Dialogue) -> boolean,
+	CancelAll: (self: Dialogue) -> (),
+	IsSpeaking: (self: Dialogue) -> boolean,
 }
 
 export type Animation = {
@@ -452,8 +536,9 @@ export type Sound = {
 	StopAll: (self: Sound) -> (),
 }
 
--- VFX are played at a destination (a part, or a character's root part) and clean themselves up; nothing stays loaded,
--- so there is nothing to stop. Searched like assets: the NPC first, then weapons in the order they were equipped.
+-- VFX are played at a destination (a part, or the part a model resolves to) and clean themselves up; nothing stays loaded,
+-- so there is nothing to stop. A particle is the exception: it stays until its maker destroys it.
+-- Searched like assets: the NPC first, then weapons in the order they were equipped.
 export type VFX = {
 	Play: (self: VFX, vfxName: string, destination: BasePart | Model, source: TypeCDN.ContentSource?) -> boolean,
 	PlayGroup: (
@@ -462,6 +547,12 @@ export type VFX = {
 		destination: BasePart | Model,
 		source: TypeCDN.ContentSource?
 	) -> boolean,
+	CreateParticle: (
+		self: VFX,
+		vfxName: string,
+		location: TypeVFX.ParticleLocation,
+		source: TypeCDN.ContentSource?
+	) -> TypeVFX.Particle?,
 }
 
 export type Router = {
@@ -488,6 +579,7 @@ export type Abilities = {
 	CanDodge: (self: Abilities, direction: TypeMovement.MovementDirection?) -> (boolean, string?),
 	CanBeEvasive: (self: Abilities) -> (boolean, string?),
 	CanBlock: (self: Abilities) -> (boolean, string?),
+	CanParry: (self: Abilities) -> (boolean, string?),
 }
 
 export type Damage = {
@@ -506,13 +598,17 @@ export type Damage = {
 	BeginStagger: (self: Damage) -> (boolean, string?),
 	EndStagger: (self: Damage) -> (),
 	BeginLaunch: (self: Damage) -> (boolean, string?),
-	EndLaunch: (self: Damage) -> (),
-	GetHitCategory: (self: Damage, amount: number) -> TypeDamage.HitCategory,
+	EndLaunch: (self: Damage, recovered: boolean?) -> (),
+	GetHitCategory: (self: Damage, amount: number, attackWeight: TypeDamage.HitCategory?) -> TypeDamage.HitCategory,
 	IsBlocking: (self: Damage) -> boolean,
 	BeginBlock: (self: Damage) -> (boolean, string?),
 	EndBlock: (self: Damage) -> (),
 	BreakBlock: (self: Damage, reason: string?) -> (),
 	IsBlockBroken: (self: Damage) -> boolean,
+	IsParrying: (self: Damage) -> boolean,
+	BeginParry: (self: Damage) -> (boolean, string?),
+	CloseParry: (self: Damage) -> (),
+	EndParry: (self: Damage) -> (),
 }
 
 -- Rolls a d20 scaled to 100 against the character's Config/Levels. Several skills are rolled for at their average level.
@@ -534,10 +630,21 @@ export type Attacks = {
 	) -> (TypeAttack.AttackData?, TypeCDN.ContentSource?),
 	GetDesiredAttack: (self: Attacks) -> (TypeAttack.AttackData?, TypeCDN.ContentSource?),
 	ClearDesiredAttack: (self: Attacks) -> (),
-	CanAffordAttack: (self: Attacks, attack: TypeAttack.AttackData) -> (boolean, string?),
+	CanAffordAttack: (
+		self: Attacks,
+		attack: TypeAttack.AttackData,
+		source: TypeCDN.ContentSource
+	) -> (boolean, string?),
 	IsReadyToAttack: (self: Attacks) -> boolean,
 	IsPressingOn: (self: Attacks) -> boolean,
 	CancelCurrentAttack: (self: Attacks, force: boolean?) -> (boolean, string?),
+	WouldBounce: (
+		self: Attacks,
+		attacker: Model,
+		damageType: TypeDamage.DamageType?,
+		attackWeight: TypeDamage.HitCategory?
+	) -> boolean,
+	BounceAttack: (self: Attacks, opponent: Model?) -> (boolean, string?),
 	Attack: (
 		self: Attacks,
 		attackType: TypeAttack.AttackType,
@@ -590,6 +697,20 @@ export type TargetSelector = {
 	) -> TypeTargetting.TargettingContext?,
 }
 
+-- The characters on our side within our provoke range, and the friends we've connected with, updated after each search.
+-- A behavior module: others reach it through Functions, and it announces changes as Names.Targetting.TeammateSpotted /
+-- TeammateLost / FriendAdded / FriendLost.
+export type Friends = {
+	GetTeammates: (self: Friends) -> { TypeTargetting.TargettingContext },
+	IsTeammate: (self: Friends, character: Model) -> boolean,
+	GetTeammateDistance: (self: Friends, character: Model) -> number?,
+	GetFriends: (self: Friends) -> { TypeFriends.FriendContext },
+	GetNearbyFriends: (self: Friends) -> { TypeFriends.FriendContext },
+	IsFriend: (self: Friends, character: Model) -> boolean,
+	RequestFriend: (self: Friends, character: Model) -> TypeFriends.FriendOutcome,
+	ReceiveFriendRequest: (self: Friends, request: TypeFriends.FriendRequest) -> TypeFriends.FriendOutcome,
+}
+
 -- Shared range logic for the tasks. Core like Configuration and Assets, so tasks use it directly.
 export type Distance = {
 	-- these compare numbers only, so they work on the module without a character (Distance.Classify)
@@ -597,6 +718,7 @@ export type Distance = {
 	IsFarPast: (distance: number, ideal: number, farDiff: number) -> boolean,
 	GetEngageDistance: (self: Distance, targettingRange: TypeTargetting.TargettingRange) -> number?,
 	GetTooCloseDiff: (self: Distance) -> number,
+	GetProvokeRange: (self: Distance) -> number?,
 	GetDistanceTo: (self: Distance, target: Model) -> number?,
 	GetDistanceToPosition: (self: Distance, position: Vector3) -> number?,
 	IsWithin: (self: Distance, target: Model, range: number) -> boolean,
@@ -634,17 +756,30 @@ export type Disposition = {
 -- Functions (GetStamina, GetStaminaCost, GetStaminaEfficiency, CanAffordStamina, PurchaseStamina, SpendStamina, RestoreStamina).
 export type Stamina = {
 	Init: (self: Stamina) -> (),
+	-- Makes the particle of the exhaustion. Goes through Functions, so it runs after they are registered.
+	InitParticle: (self: Stamina) -> (),
 	GetStamina: (self: Stamina) -> (number, number),
 	GetFraction: (self: Stamina) -> number,
-	GetCost: (self: Stamina, cost: TypeStamina.Cost) -> number?,
+	-- `source` is what the cost is paid for: an attack bought for the equipped weapon is priced by the weapon
+	GetCost: (self: Stamina, cost: TypeStamina.Cost, source: TypeCDN.ContentSource?) -> number?,
 	IsExhausted: (self: Stamina) -> boolean,
 	-- 1 when rested; while exhausted from 0.5 (nothing left) rising with the stamina. Modules apply it themselves.
 	GetEfficiency: (self: Stamina) -> number,
 	CanRegenerate: (self: Stamina) -> boolean,
 	-- `requireRested` declines the purchase of an exhausted character even if it has enough
-	CanAfford: (self: Stamina, cost: TypeStamina.Cost, requireRested: boolean?) -> (boolean, string?),
+	CanAfford: (
+		self: Stamina,
+		cost: TypeStamina.Cost,
+		requireRested: boolean?,
+		source: TypeCDN.ContentSource?
+	) -> (boolean, string?),
 	Spend: (self: Stamina, amount: number, reason: string?, requireRested: boolean?) -> (boolean, string?),
-	Purchase: (self: Stamina, cost: TypeStamina.Cost, requireRested: boolean?) -> (boolean, string?),
+	Purchase: (
+		self: Stamina,
+		cost: TypeStamina.Cost,
+		requireRested: boolean?,
+		source: TypeCDN.ContentSource?
+	) -> (boolean, string?),
 	Restore: (self: Stamina, amount: number, reason: string?) -> (boolean, string?),
 	Break: (self: Stamina, reason: string?) -> (boolean, string?),
 	Destroy: (self: Stamina) -> (),
@@ -704,6 +839,7 @@ export type Base = {
 	Weapons: Weapons,
 	Movement: Movement,
 	TargetSelector: TargetSelector,
+	Friends: Friends,
 	Tasks: TypeTask.Scheduler,
 	Scheduler: TypeTask.Scheduler,
 	CharacterTasks: CharacterTasks,

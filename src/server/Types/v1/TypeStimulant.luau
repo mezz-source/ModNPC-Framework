@@ -41,6 +41,9 @@ export type StimulantSpec = {
 	ExpiresAt: number,
 	Position: Vector3?,
 	Data: any?,
+	-- Stays true after its emitter is gone. Normally everything an emitter has in flight is retracted when it dies or is
+	-- destroyed; a stimulant that announces that very thing (Died) has to outlive it.
+	Lingers: boolean?,
 }
 
 -- A whole stimulant on its way out: what it is and who it is for. Made with StimulantBuilder and handed to
@@ -52,6 +55,7 @@ export type OutgoingStimulant = {
 	ExpiresAt: number,
 	Position: Vector3?,
 	Data: any?,
+	Lingers: boolean?,
 }
 
 -- What a builder sends through: a character's CharacterAPI
@@ -71,6 +75,7 @@ export type StimulantBuilder = {
 	ExpiringAt: (self: StimulantBuilder, expiresAt: number) -> StimulantBuilder,
 	At: (self: StimulantBuilder, position: Vector3) -> StimulantBuilder,
 	WithData: (self: StimulantBuilder, data: any) -> StimulantBuilder,
+	Lingering: (self: StimulantBuilder) -> StimulantBuilder,
 	Build: (self: StimulantBuilder) -> (OutgoingStimulant?, string?),
 	Send: (self: StimulantBuilder) -> (boolean, string?),
 	Emit: (self: StimulantBuilder) -> (EmitResult?, string?),
@@ -95,7 +100,32 @@ TypeStimulant.Names = table.freeze({
 	-- The sender just became exhausted (see Stamina) while the receiver is its target: it is slower and weaker for a while.
 	-- Data: ExhaustedData. Normal, a couple of seconds.
 	Exhausted = "Exhausted",
+	-- The sender just died. Broadcast to every receiver, Normal, a few seconds, and it outlives its sender (Lingers).
+	-- Positioned where the sender fell. Data: DiedData.
+	Died = "Died",
 })
+
+-- The killing hit, when it came through the damage register (Damage:ReceiveRegistered), so it is known in full
+export type DiedDamage = {
+	-- Who dealt it, nil for damage with no attacker
+	Attacker: Model?,
+	-- What the sender took from it, after blocking and its multipliers
+	Amount: number,
+	DamageType: string?,
+	-- The special it landed with, if any
+	Special: string?,
+}
+
+export type DiedData = {
+	-- Whether the death came through the damage register. False for damage that bypassed it (a script setting the humanoid's
+	-- health, a fall...), in which case nothing is known of the killing blow and Damage is missing.
+	Registered: boolean,
+	-- The killing hit. Only when Registered.
+	Damage: DiedDamage?,
+	-- The last character that hit the sender through the damage register (a blocked hit counts), whether or not it was the
+	-- killing blow. Missing if nobody did, or if it is gone since.
+	LastAttacker: Model?,
+}
 
 export type ExhaustedData = {
 	-- How well the sender does things now (Stamina:GetEfficiency), below 1

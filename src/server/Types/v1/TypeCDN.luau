@@ -9,7 +9,9 @@ export type SearchResult = {
 	Message: string?,
 }
 
-export type PrimitiveValue = boolean | number | string
+-- What a ValueBase can hold and still be read as a setting: Color3Value (the dialogue TextColor) is the one that isn't a
+-- Lua primitive, but it is a plain value all the same
+export type PrimitiveValue = boolean | number | string | Color3
 
 export type ConfigurationValue = {
 	Name: string,

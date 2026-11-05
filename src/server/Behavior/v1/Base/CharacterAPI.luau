@@ -5,12 +5,15 @@ local TypeBars = require(ServerScriptService.ModNPCServer.Types.v1.TypeBars)
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
+local TypeDialogueFrame = require(ServerScriptService.ModNPCServer.Types.v1.TypeDialogueFrame)
+local TypeFriends = require(ServerScriptService.ModNPCServer.Types.v1.TypeFriends)
 local TypeHighlights = require(ServerScriptService.ModNPCServer.Types.v1.TypeHighlights)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
 local TypeSound = require(ServerScriptService.ModNPCServer.Types.v1.TypeSound)
 local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStimulant)
 local TypeDamage = require(ServerScriptService.ModNPCServer.Types.v1.TypeDamage)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
+local TypeVFX = require(ServerScriptService.ModNPCServer.Types.v1.TypeVFX)
 local TypeMovement = require(ServerScriptService.ModNPCServer.Types.v1.TypeMovement)
 local CharacterAPI = {}
 CharacterAPI.__index = CharacterAPI
@@ -116,12 +119,13 @@ function CharacterAPI:DealDamage(
 	amount: number,
 	damageType: TypeDamage.DamageType?,
 	special: TypeDamage.DamageSpecial?,
-	maxStaggerTime: number?
+	maxStaggerTime: number?,
+	attackWeight: TypeDamage.HitCategory?
 ): TypeRequests.CharacterResponse
 	return self:RequestAPI(
 		Modules.Damage,
 		DamageFunctions.TakeDamage,
-		{ self.Character, receiver, amount, damageType, special, maxStaggerTime }
+		{ self.Character, receiver, amount, damageType, special, maxStaggerTime, attackWeight }
 	)
 end
 
@@ -253,6 +257,20 @@ function CharacterAPI:PlayVFX(effects: { TypeCDN.VFXData }, destination: BasePar
 	return self:RequestAPIData(Modules.VFX, Functions.VFX.PlayVFX, { self.Character, effects, destination })
 end
 
+-- Makes a particle from the effect at the location, which stays until destroyed and drives itself (Emit, Enable, Disable,
+-- Destroy). Nil if it could not be made.
+function CharacterAPI:CreateParticle(
+	effect: TypeCDN.ParticleEmitterData,
+	location: TypeVFX.ParticleLocation
+): TypeVFX.Particle?
+	return self:RequestAPIData(Modules.VFX, Functions.VFX.CreateParticle, { self.Character, effect, location })
+end
+
+-- Turns the weapon's trail on or off, if it uses one (UseTrail in its Config). Nothing comes back: it is purely cosmetic.
+function CharacterAPI:SetWeaponTrail(weapon: Instance, enabled: boolean)
+	self:RequestAPI(Modules.VFX, Functions.VFX.SetWeaponTrail, { weapon, enabled }, true)
+end
+
 -- Bars
 
 -- Makes a bar above this character's head. The bar drives its own UI (SetFill, SetSecondaryFill, colors...) and
@@ -272,6 +290,35 @@ end
 function CharacterAPI:RemoveBar(barName: string): boolean
 	local response = self:RequestAPI(Modules.Bars, Functions.Bars.RemoveBar, { self.Character, barName })
 	return response ~= nil and response.Success
+end
+
+-- Dialogue
+
+-- Makes this character's dialogue frame: the DialogueUI above its head, which it keeps for good. The frame queues, types
+-- and cancels lines by itself (Queue, Cancel...) and destroys itself when its gui is removed, so it is kept by the caller;
+-- nil if it could not be made (for example the character already has one).
+function CharacterAPI:CreateDialogueFrame(options: TypeDialogueFrame.FrameOptions?): TypeDialogueFrame.Frame?
+	return self:RequestAPIData(Modules.Dialogue, Functions.Dialogue.CreateFrame, { self.Character, options })
+end
+
+-- This character's dialogue frame, nil if it has none
+function CharacterAPI:GetDialogueFrame(): TypeDialogueFrame.Frame?
+	return self:RequestAPIData(Modules.Dialogue, Functions.Dialogue.GetFrame, { self.Character })
+end
+
+-- Destroys this character's dialogue frame; returns whether there was one. Not fire and forget, so a new frame can be made
+-- as soon as this returns.
+function CharacterAPI:RemoveDialogueFrame(): boolean
+	local response = self:RequestAPI(Modules.Dialogue, Functions.Dialogue.RemoveFrame, { self.Character })
+	return response ~= nil and response.Success
+end
+
+-- Asks another character to answer this one's banter (its BanterRespond function). Returns whether it is answering; a
+-- target that isn't a started ModNPC, or that declines (cooldown, something more important to say), is just a false.
+function CharacterAPI:RequestBanterResponse(target: Model): boolean
+	local response =
+		self:RequestAPI(Modules.Dialogue, Functions.Dialogue.RequestBanterResponse, { self.Character, target })
+	return response ~= nil and response.Success and response.Data == true
 end
 
 -- Highlights
@@ -585,6 +632,12 @@ function CharacterAPI:GetSameTeamTargets(): { TypeTargetting.TargettingContext }
 	end
 
 	return self:_withoutSelf(self:GetTargetsOnTeams({ team }))
+end
+
+-- Asks another character to connect (its ReceiveFriendRequest function), through the API's lock on the pair
+function CharacterAPI:RequestFriend(target: Model): TypeFriends.FriendOutcome
+	return self:RequestAPIData(Modules.Friends, Functions.Friends.RequestFriend, { self.Character, target })
+		or TypeFriends.Outcomes.Failed
 end
 
 -- Requests

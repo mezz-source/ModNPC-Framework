@@ -21,8 +21,12 @@ TypePermissions.Names = table.freeze({
 	CanDodge = "CanDodge",
 	-- Raising a guard (the CanBlock ability)
 	CanBlock = "CanBlock",
+	-- Trying to parry (the CanParry ability)
+	CanParry = "CanParry",
 	-- Starting a sprint
 	CanSprint = "CanSprint",
+	-- Starting an aimless walk while there is no target (the Wander task). Off, the character stands where it is.
+	CanWander = "CanWander",
 	-- Being staggered by a hit (Stagger and StaggerBackwards specials)
 	CanBeStaggered = "CanBeStaggered",
 	-- Being launched by a hit

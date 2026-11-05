@@ -1,8 +1,10 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local TypeBlock = require(ServerScriptService.ModNPCServer.Types.v1.TypeBlock)
+local TypeBounce = require(ServerScriptService.ModNPCServer.Types.v1.TypeBounce)
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
+local TypeParry = require(ServerScriptService.ModNPCServer.Types.v1.TypeParry)
 local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
 local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
 
@@ -285,17 +287,21 @@ function Weapons:_loadAnimations(weapon: Instance)
 	end
 end
 
--- The weapon's block animations (its Animations/Blocks). Only the weapon's own are looked at, the NPC's are no fallback.
--- Loaded as the weapon's content too. An animation the weapon doesn't have is just not shown when it blocks.
-function Weapons:_loadBlockAnimations(weapon: Instance)
-	local animations = self.Base.Assets:GetData(weapon).Animations[TypeBlock.AnimationCategory]
+-- The animations of a category of the weapon that these settings name (its Animations/Blocks for blocking, Animations/Damage
+-- for parrying). Only the weapon's own are looked at, the NPC's are no fallback. Loaded as the weapon's content too.
+function Weapons:_loadCategoryAnimations(
+	weapon: Instance,
+	category: string,
+	animationSettings: { [string]: { Priority: Enum.AnimationPriority, Loop: boolean } }
+)
+	local animations = self.Base.Assets:GetData(weapon).Animations[category]
 	if not animations then
-		warn("Weapon", weapon.Name, "has no", TypeBlock.AnimationCategory, "animations")
+		warn("Weapon", weapon.Name, "has no", category, "animations")
 		return
 	end
 
 	for _, animation in ipairs(animations) do
-		local settings = TypeBlock.AnimationSettings[animation.Name]
+		local settings = animationSettings[animation.Name]
 		if settings then
 			self.Functions:CallFunction(
 				FunctionEnum.LoadAnimation,
@@ -309,6 +315,26 @@ function Weapons:_loadBlockAnimations(weapon: Instance)
 	end
 end
 
+-- Every animation of the weapon's bounce category, however many it has: a bounce picks one at random. As the weapon's content.
+function Weapons:_loadBounceAnimations(weapon: Instance)
+	local animations = self.Base.Assets:GetData(weapon).Animations[TypeBounce.AnimationCategory]
+	if not animations then
+		warn("Weapon", weapon.Name, "has no", TypeBounce.AnimationCategory, "animations")
+		return
+	end
+
+	for _, animation in ipairs(animations) do
+		self.Functions:CallFunction(
+			FunctionEnum.LoadAnimation,
+			animation,
+			animation.Name,
+			TypeBounce.AnimationPriority,
+			false,
+			weapon
+		)
+	end
+end
+
 function Weapons:_equipped(weapon: Instance)
 	-- a weapon equipped around this module (straight through the CharacterAPI) while another was held
 	if self.Weapon and self.Weapon ~= weapon then
@@ -319,7 +345,10 @@ function Weapons:_equipped(weapon: Instance)
 	self.Base.State:Set(STATE_KEY, WeaponStateEnum.Equipped)
 	self.AlwaysArmed = self.CharacterAPI:GetWeaponSetting(weapon, ALWAYS_ARMED_SETTING) == true
 	self:_loadAnimations(weapon)
-	self:_loadBlockAnimations(weapon)
+	-- An animation the weapon doesn't have is just not shown when it blocks, and a parry can't start without its own
+	self:_loadCategoryAnimations(weapon, TypeBlock.AnimationCategory, TypeBlock.AnimationSettings)
+	self:_loadCategoryAnimations(weapon, TypeParry.AnimationCategory, TypeParry.AnimationSettings)
+	self:_loadBounceAnimations(weapon)
 
 	if self.AlwaysArmed or next(self.Targets) ~= nil then
 		self:_callForArms()
@@ -350,10 +379,14 @@ function Weapons:_unequipped(source: TypeCDN.ContentSource)
 	self.AlwaysArmed = false
 	self.Loaded = {}
 
-	-- The weapon held the guard (its animations, and the right to block), so one that is up comes down with it. Its tracks
-	-- went with its source already (Animation hears of the removal first).
-	-- (CancelData is Block:Cancel's animationsGone)
-	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Block, "Weapon unequipped", { CancelData = true })
+	-- The weapon held the guard, the parry and the bounce (their animations), so one in progress ends with it. Its
+	-- tracks went with its source already (Animation hears of the removal first).
+	-- (CancelData is the animationsGone of their Cancel)
+	self.Base.Scheduler:StopTasks(
+		{ Categories = { TypeTask.CategoriesEnum.Block, TypeTask.CategoriesEnum.Parry, TypeTask.CategoriesEnum.Bounce } },
+		"Weapon unequipped",
+		{ CancelData = true }
+	)
 
 	if wasArmed then
 		self.Base.Events:Dispatch(WeaponEvents.Disarmed, { Weapon = weapon } :: TypeCharacterEvents.WeaponChanged)

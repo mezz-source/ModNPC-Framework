@@ -48,6 +48,7 @@ self.Base:NewStimulant(TypeStimulant.Names.SprintingTowards)
     :Lasting(1)                          -- seconds from Build; or :ExpiringAt(os.clock() + 1)
     :At(position)                        -- optional
     :WithData({ Distance = distance })   -- optional, plain data + instances only
+  :Lingering()                         -- optional: survives the sender's death (only for "I died"-type stimulants)
     :Send()                              -- (ok, err)
 
 -- retractable: when it may stop being true early (an interruptible windup)
@@ -108,6 +109,14 @@ Existing ones:
 | `SprintingTowards` | ChaseTargets, when a sprint starts | the focus target | Low | 1s | `SprintingTowardsData` |
 | `BlockBroken` | Block task, when a hit breaks the guard | the attacker | High | the break animation (0.5s fallback) | none |
 | `Exhausted` | Stamina, as the character becomes exhausted | the focus target of its targetting task | Normal | 2s | `ExhaustedData` (Efficiency) |
+| `Died` | Damage, on `Humanoid.Died` | **everyone** (`ToAll`, a broadcast on purpose, so later systems can hear any death) | Normal | 5s, `Lingering` | `DiedData`: `Registered`, `Damage?` (killing hit: Attacker, Amount, DamageType, Special; only when registered), `LastAttacker?` |
+
+`Died` details: Damage stamps `fatalHit` before taking the health of a registered hit and clears it if the character
+survived, so the `Died` handler can tell a registered death from damage that bypassed the register (a script zeroing the
+humanoid), whichever order the signal and `Receive` finish in. `LastAttacker` is the last character to land (or be blocked
+by) a registered hit; it is dropped if that model has since been destroyed. Positioned where the sender fell.
+**`:Lingering()`** (spec `Lingers`) is what lets it outlive its sender: normally everything an emitter has in flight is
+retracted when it dies, which a death announcement must not be. Use it only for stimulants that announce the emitter's end.
 
 "Our target" is the focus target of the task in the Targetting category
 (`Scheduler:GetTask(Targetting).FocusTarget.Character`), the same one
@@ -135,6 +144,7 @@ Consumers today:
 | --- | --- | --- |
 | `Defense` (see the `defense` skill) | `IncomingAttack` | consumes it and decides a dodge / last moment guard |
 | `Disposition` | `IncomingAttack`, `BlockBroken`, `Exhausted`, `SprintingTowards` | perceives without consuming: a pulse factor per stimulant (Threatened, TargetOpen, TargetTired, Charged) |
+| `DialogueBark` task (see the `dialogue` skill) | `Died` | perceives without consuming: if the dead `Source` is the last character it focused, barks `CombatEndVictory`. Remembers seen ids until they expire, since Pending re-offers them every tick |
 
 Several subscribers get the same Pending list; whoever subscribed first (Disposition is
 built before Defense) sees it first. A consumer that only *reads* must not consume, or it

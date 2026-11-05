@@ -4,9 +4,14 @@
 
 ### 1. Integrate dialogue system
 
-- [ ] Dialogue priority enum / base handler
-- [ ] Dialogue API / class
-- [ ] Relevant text effects
+- [x] Dialogue priority enum / base handler (`Config/Dialogue/Priorities`, `SayLine` function, Death line on death)
+- [x] `DialogueBark` essential start task (listens for events, barks through `SayLine`)
+- [x] Basic barks: CombatDealCrit, CombatLaunched, CombatRecieveCrit (+ block breaks), CombatRecover, CombatDodged, Death, Idle, SpotEnemyIndividual
+- [x] `Config/Dialogue/MaxRandomDelay` per-category random delay before a line is said
+- [ ] Barks that need broadcasts/coordination: SpotEnemyTeamed, SpotFriendStart/Response, FriendlyDead, (Friendly)TeamChanged
+- [x] Dialogue API / class (per-character dialogue frame: queue, cancel, destroy; `CharacterAPI:CreateDialogueFrame`, `base.Dialogue:Queue/Cancel/CancelAll`)
+- [ ] Wire the frame's `OnEvent` (`<sfx>`, `<anim>`, `<event>`)
+- [x] Relevant text effects
 
 #### 1b. Conversation system
 
@@ -16,11 +21,15 @@
 
 ### 2. Attack bouncing
 
-Two opposing enemies who attack each other with an attack of the same type (e.g. "sharp v. sharp") play a bounce-off animation and trade a small amount of damage.
+- [x] Two characters attacking each other with hits of the same damage type and weight bounce: both attacks are cancelled, nobody takes damage or a special, each is thrown back, plays the weapon's `Bounce` sound and a random `AttackBounce` animation, and can't attack until it ends (`Attacks:BounceAttack`, `Bounce` task, `BounceState`)
 
 ### 3. Attack parrying
 
-Roll for intellect to trigger a react reaction to an incoming attack stimulus.
+- [x] `Parry` task + `ParryState` (window until the `ParryEnd` marker, then held until the animation ends; a hit in the window is `Parried`: no damage, `ParryHit` plays)
+- [x] Roll for intellect to trigger a parry as a reaction to an incoming attack stimulus (`Defense:_tryParry`, first thing `_decide` does; timed to start 0.15s before the hit)
+- [x] Parries cost the weapon's `Config/Stamina/ParryConsumption`; a parried hit refunds 120% of it
+- [x] A parried hit sends 50% of the damage back from Base (`Damage:_punishParried`): light attack = StaggerBackwards, heavier = Launch; the attacker's attacks are cancelled
+- [x] `Damage/Parry` asset carries the `ParryEnd` marker (0.30s of 0.55s)
 
 ### 4. Ranged bullets / ranged attack systems
 
@@ -32,6 +41,19 @@ We have targeting params for it, but there's no framework for bullets or magical
 ### 5. Attack validation
 
 - [ ] Add config validation for attacks (attack context/hit context enforcement)
+
+### 6. Friend system
+We have a targetting system, we just need to build some broadcasts and a base behavior module
+
+- [ ] Build the API support for tracking when an NPC changes teams and emit a broadcast stimulant
+- [ ] Implement a broadcast stimulant for an NPC dying in general
+- [ ] Build a base friend module with various utilities (like getting nearest friends) (`Friends` exists with `GetTeammates`/`IsTeammate`/`GetTeammateDistance`; utilities still to come)
+- [x] Spot targets with matching teams and add them to a friends list (`Friends`, synced after each search, limited to the provoke range)
+- [x] Friend connection handshake: API `Friends` module locks the pair and carries the request, Base `Friends` asks and answers (`RequestFriend`/`ReceiveFriendRequest`), once per pair; friends are remembered out of range
+- [ ] Listen for events indicating they change teams
+- [ ] Listen for events where a friendly dies
+- [ ] Add a wander preference for patrolling around a friend instead of randomly
+- [ ] Target spotting can play a different line depending on if a friend spotted them first or not (Individual/Teamed switch)
 
 ---
 
@@ -45,15 +67,16 @@ We have targeting params for it, but there's no framework for bullets or magical
 
 ### 2. Attack trails
 
-- [ ] ModWeapons with `TrailEnabled` will have a trail instance enabled/disabled on attack
+- [x] ModWeapons with `UseTrail` have their `WeaponTrail` enabled for the length of the attack task (`CharacterAPI:SetWeaponTrail`)
 
 ### 3. Better VFX system
 
 - [ ] Allow for more targeted VFX (e.g. creating a temp VFX part to spawn a swipe, etc.)
+- [x] Persistent particles: `CharacterAPI:CreateParticle` from VFX data at a part, model or world position (Emit, Enable, Disable, Destroy)
 
 ### 4. Bounce particles
 
-- [ ] Particles for attack bouncing (see [Attack bouncing](#2-attack-bouncing))
+- [x] Particles for attack bouncing (see [Attack bouncing](#2-attack-bouncing))
 
 ---
 

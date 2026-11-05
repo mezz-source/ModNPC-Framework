@@ -23,8 +23,18 @@ consumes it and calls `ReactToIncomingAttack(stimulant)`. `timeLeft = ExpiresAt 
 (the hit lands at ExpiresAt).
 
 1. `timeLeft <= 0` → **None** ("Too late").
+1b. `CanParry` (which forbids a raised guard), the weapon's `ParryConsumption` is affordable, and `RollSkill(Intellect)`
+   passes → **Parry**. It comes before everything below. The Parry task starts `PARRY_LEAD`
+   (0.15s, the middle of its 0.30s window) before the hit, or at once if less is left, and
+   pays only then: a retracted hit calls it off for free. Reacting holds during the wait. A
+   parry refused when it fires (staggered, out of stamina) falls back to step 4, like a
+   dodge. A parried hit refunds 120% of what was paid and sends 50% of the damage we would
+   have taken back at a known attacker (`Damage:_punishParried`): StaggerBackwards for a
+   Light hit, Launch for heavier (see `GetHitCategory`: the listed `AttackWeight`, damage only
+   as a backup). A failed
+   roll goes on to step 2.
 2. Guard already up (`IsBlocking`) and it can pay this hit's block cost (weight from
-   `GetHitCategory(Data.BaseDamage)` → `TypeBlock.HitCosts`) → **Guarded**. The guard
+   `GetHitCategory(Data.BaseDamage, Data.AttackWeight)` → `TypeBlock.HitCosts`) → **Guarded**. The guard
    is held for it if Defense raised it.
 3. Dodge, if `timeLeft >= DodgeReactionTime`, `CanDodge`, the rested Dodge cost is
    affordable, and `RollSkills({ Agility })` passes (`Roll <= Target + DodgeBonus*100`;
@@ -77,6 +87,20 @@ added during play isn't seen (edits to existing ones are).
   0.05s reactions: ~45% dodge. Every Dodge decision avoided its hit; every Block/Guarded
   ended Blocked.
 - 60s template fights: guard uptime 22-52%, exhaustion 0-43%, damage 90-380 per side.
+
+## Measured (parry, 2026-11-04)
+
+- Real attacks, Intellect 100, scheduled: 74 Parry decisions, 74 Parried, at attacker speeds
+  from 1.0 to about 0.5 (timeLeft up to 0.58). Started on the spot it was 27 of 31, every whiff
+  above 0.30 left.
+- Intellect 30 (35% chance): 9 of 29 hits were Parry.
+- IncomingAttack timing at reduced efficiency (72 hits, attacker at 100%, ~60% and ~50% speed,
+  combos clamped to MinEfficiency 0.7): the predicted time was within 0.007s of the hit, on the
+  attacker and in the `ExpiresAt` the defender received, with no fallback to the animation's end.
+  A tired attacker's warnings are longer (Kick2 0.33s rested, 0.64s at half speed), which is why
+  the parry is scheduled.
+- `CLAUDE_MODNPC` has `DodgeBonus` 5, which passes every dodge roll, so failed parries mostly
+  become dodges and blocks are rare there.
 
 ## Testing recipe
 

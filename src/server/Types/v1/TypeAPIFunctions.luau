@@ -7,6 +7,7 @@ export type Module =
 	| "Targetting"
 	| "Animation"
 	| "Bars"
+	| "Dialogue"
 	| "Highlights"
 	| "ContentDelivery"
 	| "Movement"
@@ -14,6 +15,7 @@ export type Module =
 	| "VFX"
 	| "Weapon"
 	| "Stimulants"
+	| "Friends"
 
 TypeAPI.Modules = table.freeze({
 	CharacterUtility = "CharacterUtility",
@@ -22,6 +24,7 @@ TypeAPI.Modules = table.freeze({
 	Targetting = "Targetting",
 	Animation = "Animation",
 	Bars = "Bars",
+	Dialogue = "Dialogue",
 	Highlights = "Highlights",
 	ContentDelivery = "ContentDelivery",
 	Movement = "Movement",
@@ -29,6 +32,7 @@ TypeAPI.Modules = table.freeze({
 	VFX = "VFX",
 	Weapon = "Weapon",
 	Stimulants = "Stimulants",
+	Friends = "Friends",
 })
 
 TypeAPI.Functions = table.freeze({
@@ -63,6 +67,12 @@ TypeAPI.Functions = table.freeze({
 		CreateBar = "createBar",
 		GetBar = "getBar",
 		RemoveBar = "removeBar",
+	},
+	Dialogue = {
+		CreateFrame = "createFrame",
+		GetFrame = "getFrame",
+		RemoveFrame = "removeFrame",
+		RequestBanterResponse = "requestBanterResponse",
 	},
 	Highlights = {
 		CreateHighlight = "createHighlight",
@@ -144,6 +154,8 @@ TypeAPI.Functions = table.freeze({
 	},
 	VFX = {
 		PlayVFX = "playVFX",
+		CreateParticle = "createParticle",
+		SetWeaponTrail = "setWeaponTrail",
 	},
 	Weapon = {
 		IsValidWeapon = "isValidWeapon",
@@ -158,6 +170,9 @@ TypeAPI.Functions = table.freeze({
 	Stimulants = {
 		Emit = "emit",
 		Retract = "retract",
+	},
+	Friends = {
+		RequestFriend = "requestFriend",
 	},
 })
 

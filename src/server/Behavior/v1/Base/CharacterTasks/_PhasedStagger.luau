@@ -210,7 +210,8 @@ function PhasedStagger:_cleanup()
 		end
 	end
 
-	self.Functions:CallFunction(self.EndFunction)
+	-- whether we ran our course (the end function may tell a recovery from being cut short)
+	self.Functions:CallFunction(self.EndFunction, self.Finished == true)
 end
 
 return PhasedStagger

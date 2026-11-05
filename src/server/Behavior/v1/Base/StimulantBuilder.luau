@@ -34,6 +34,7 @@ function StimulantBuilder.new(name: string, sender: TypeStimulant.StimulantSende
 	self._expiresAt = nil :: number?
 	self._position = nil :: Vector3?
 	self._data = nil :: any
+	self._lingers = false
 
 	return (self :: any) :: StimulantBuilder
 end
@@ -87,6 +88,13 @@ function StimulantBuilder:WithData(data: any): StimulantBuilder
 	return self
 end
 
+-- Stays true after the sender is gone. Without this, a sender that dies or is destroyed has everything it still had in
+-- flight retracted; this is for a stimulant that announces exactly that (Died).
+function StimulantBuilder:Lingering(): StimulantBuilder
+	self._lingers = true
+	return self
+end
+
 -- The stimulant, or nil and why it can't be one yet. The API checks it again when it is sent.
 function StimulantBuilder:Build(): (OutgoingStimulant?, string?)
 	if type(self._name) ~= "string" or self._name == "" then
@@ -121,6 +129,7 @@ function StimulantBuilder:Build(): (OutgoingStimulant?, string?)
 		ExpiresAt = expiresAt,
 		Position = self._position,
 		Data = self._data,
+		Lingers = if self._lingers then true else nil,
 	}, nil
 end
 

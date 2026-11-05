@@ -135,7 +135,7 @@ The framework runs entirely on the server. Players never run its code. A line go
 3. **Board** clones one `TextLabel` per letter into the character's `DialogueUI` BillboardGui at its measured spot, using the letter's color, boldness and slant.
 
 ```luau
-local board = Dialogue.Board.new(character.DialogueUI)
+local board = Dialogue.Board.new(character.Head.DialogueUI)
 board.ShowAll(board.Build("Well <b>hello</b> there."))
 ```
 

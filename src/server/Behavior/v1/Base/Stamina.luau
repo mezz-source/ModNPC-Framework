@@ -1,4 +1,5 @@
 local ServerScriptService = game:GetService("ServerScriptService")
+local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeStamina = require(ServerScriptService.ModNPCServer.Types.v1.TypeStamina)
 local TypeBars = require(ServerScriptService.ModNPCServer.Types.v1.TypeBars)
@@ -8,11 +9,13 @@ local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStim
 local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
 local TypeBehavior = require(ServerScriptService.ModNPCServer.Types.v1.TypeBehavior)
 local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
+local TypeVFX = require(ServerScriptService.ModNPCServer.Types.v1.TypeVFX)
 
 local Stamina = {}
 Stamina.__index = Stamina
 
 local CostSettings = TypeStamina.CostSettings
+local SourceCosts = TypeStamina.SourceCosts
 local Settings = TypeStamina.Settings
 local StaminaEvents = TypeCharacterEvents.Names.Stamina
 local StateEvents = TypeCharacterEvents.Names.State
@@ -46,6 +49,9 @@ local EFFICIENCY_CURVE = 2
 -- Seconds per full flash of the bar while the character is exhausted
 local EXHAUSTED_FLASH_PERIOD = 0.5
 
+-- The effect (VFX/Individual) the character sweats while it is exhausted
+local SWEAT_PARTICLE = "SweatParticle"
+
 -- Seconds between the steps of the sprint drain and the regeneration. Rates are per second, so a step is worth its elapsed
 -- time, and a rate of 5 comes as 1 stamina every 1/5 second.
 local UPDATE_INTERVAL = 0.2
@@ -76,8 +82,8 @@ end
 --   sprinting
 --   it sets the ExhaustionState to Exhausted when the stamina falls to the ExhaustionThreshold and back to None when it
 --   is at the RecoverThreshold again, announcing both (ExhaustionStarted, ExhaustionEnded). While exhausted it
---   regenerates faster, the bar flashes, and a purchase that asks for rested stamina (requireRested) is declined, even if
---   there is enough.
+--   regenerates faster, the bar flashes, the character sweats, and a purchase that asks for rested stamina (requireRested)
+--   is declined, even if there is enough.
 -- Exhaustion also has consequences, but they are not applied here: GetEfficiency says how well the character does things
 -- (1 when rested, 0.5 to 1 while exhausted) and it is up to every module that has something to scale (damage dealt, attack
 -- speed, roll chances, ...) to ask for it and apply it.
@@ -95,6 +101,7 @@ function Stamina.new(Base: any, character: Model)
 
 	self.Subscriptions = {}
 	self.bar = nil :: TypeBars.Bar?
+	self.sweatParticle = nil :: TypeVFX.Particle?
 	self.alive = true
 	-- Runs while there is something to drain or regenerate, and is off otherwise
 	self.updateConnection = nil :: TypeBehavior.HeartbeatConnection?
@@ -155,12 +162,30 @@ function Stamina:Init()
 		events:Subscribe(HumanoidEvents.Died, function()
 			self.alive = false
 			self:_refresh()
+			-- A corpse stays in the world, and the particle with it
+			self:_destroySweat()
 		end)
 	)
 
 	self:_createBar()
 	self:_updateExhaustion()
 	self:_refresh()
+end
+
+-- Makes the particle the character sweats with, on its head. Apart from Init because it goes through Functions, which are
+-- only registered after Init, and after the mod scripts so they can hook CreateParticle. A failure is warned about and leaves
+-- the character without sweat, which changes nothing else.
+function Stamina:InitParticle()
+	local head = self.Character:FindFirstChild("Head")
+	if not head then
+		warn("No head to sweat from for character:", self.Character.Name)
+		return
+	end
+
+	self.sweatParticle =
+		self.Base.Functions:CallFunction(FunctionEnum.CreateParticle, SWEAT_PARTICLE, head) :: TypeVFX.Particle?
+	-- The character may be exhausted already: it can start out with nothing
+	self:_updateSweat()
 end
 
 -- Whether the character is exhausted: out of breath until it has recovered (see _updateExhaustion)
@@ -208,6 +233,7 @@ function Stamina:_setExhausted(exhausted: boolean)
 		if exhausted then ExhaustionStateEnum.Exhausted else ExhaustionStateEnum.None
 	)
 	self:_updateFlash()
+	self:_updateSweat()
 
 	if exhausted then
 		self:_stopSprintingIfExhausted()
@@ -251,6 +277,28 @@ function Stamina:_updateFlash()
 		bar:StartFillFlash(TypeStamina.Bar.FlashColor, EXHAUSTED_FLASH_PERIOD)
 	else
 		bar:StopFillFlash()
+	end
+end
+
+-- The character sweats for as long as it is exhausted
+function Stamina:_updateSweat()
+	local particle = self.sweatParticle
+	if not particle then
+		return
+	end
+
+	if self:IsExhausted() then
+		particle:Enable()
+	else
+		particle:Disable()
+	end
+end
+
+function Stamina:_destroySweat()
+	local particle = self.sweatParticle
+	self.sweatParticle = nil
+	if particle then
+		particle:Destroy()
 	end
 end
 
@@ -424,20 +472,28 @@ function Stamina:GetFraction(): number
 end
 
 -- What the cost comes to for this character: its price in Config/Stamina times the ConsumptionMultiplier. A weapon cost (see
--- TypeStamina.WeaponCosts) is priced by the equipped weapon's Config/Stamina instead. A cost the configuration has no price
--- for is free. Nil for something that isn't a cost at all.
-function Stamina:GetCost(cost: TypeStamina.Cost): number?
+-- TypeStamina.WeaponCosts) is priced by the equipped weapon's Config/Stamina instead, and so is a source cost (see
+-- TypeStamina.SourceCosts, the attacks) when `source` is the equipped weapon. A cost the configuration has no price for is
+-- free. Nil for something that isn't a cost at all.
+function Stamina:GetCost(cost: TypeStamina.Cost, source: TypeCDN.ContentSource?): number?
 	local settingName = CostSettings[cost]
 	if not settingName then
 		return nil
 	end
 
+	local weaponOwned = TypeStamina.WeaponCosts[cost]
+	local sourceSetting = SourceCosts[cost]
+	local weapon = if weaponOwned or (sourceSetting and source)
+		then self.Base.Functions:CallFunction(FunctionEnum.GetEquippedWeapon)
+		else nil
+
 	local price
-	if TypeStamina.WeaponCosts[cost] then
-		local weapon = self.Base.Functions:CallFunction(FunctionEnum.GetEquippedWeapon)
+	if weaponOwned then
 		price = if weapon
 			then self.Base.CharacterAPI:GetWeaponSetting(weapon, { TypeStamina.Folder, settingName }, true)
 			else nil
+	elseif sourceSetting and weapon and source == weapon then
+		price = self.Base.CharacterAPI:GetWeaponSetting(weapon, { TypeStamina.Folder, sourceSetting }, true)
 	else
 		price = self.Configuration:Get({ TypeStamina.Folder, settingName })
 	end
@@ -449,9 +505,13 @@ function Stamina:GetCost(cost: TypeStamina.Cost): number?
 end
 
 -- Whether the character could pay for the cost right now. If it couldn't, why. With `requireRested` a character that is
--- exhausted can't, whatever it has.
-function Stamina:CanAfford(cost: TypeStamina.Cost, requireRested: boolean?): (boolean, string?)
-	local amount = self:GetCost(cost)
+-- exhausted can't, whatever it has. `source` is what the cost is paid for, see GetCost.
+function Stamina:CanAfford(
+	cost: TypeStamina.Cost,
+	requireRested: boolean?,
+	source: TypeCDN.ContentSource?
+): (boolean, string?)
+	local amount = self:GetCost(cost, source)
 	if not amount then
 		return false, "Unknown stamina cost: " .. tostring(cost)
 	end
@@ -492,13 +552,18 @@ end
 
 -- The vendor's main door: buys one of the costs, at its price for this character. Accepted if the character can pay it, in
 -- which case it is paid, declined (with why) if it can't. `requireRested` declines it for a character that is exhausted.
-function Stamina:Purchase(cost: TypeStamina.Cost, requireRested: boolean?): (boolean, string?)
-	local affordable, declinedReason = self:CanAfford(cost, requireRested)
+-- `source` is what the cost is paid for, see GetCost.
+function Stamina:Purchase(
+	cost: TypeStamina.Cost,
+	requireRested: boolean?,
+	source: TypeCDN.ContentSource?
+): (boolean, string?)
+	local affordable, declinedReason = self:CanAfford(cost, requireRested, source)
 	if not affordable then
 		return false, declinedReason
 	end
 
-	return self:Spend(self:GetCost(cost) :: number, cost, requireRested)
+	return self:Spend(self:GetCost(cost, source) :: number, cost, requireRested)
 end
 
 -- Gives stamina back, up to the maximum, whether or not the character is allowed to regenerate (that is only for the
@@ -546,6 +611,8 @@ function Stamina:Destroy()
 	if bar and not bar:IsDestroyed() then
 		bar:Destroy()
 	end
+
+	self:_destroySweat()
 
 	self.Configuration = nil
 	self.CharacterAPI = nil

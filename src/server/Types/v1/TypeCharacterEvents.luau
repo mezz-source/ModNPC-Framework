@@ -61,7 +61,7 @@ export type DamageTaken = {
 -- A hit that was meant for this character and didn't land
 export type DefenseSucceeded = {
 	Attacker: Model?,
-	-- Blocked or Dodged
+	-- Blocked, Parried or Dodged
 	RecieveType: TypeDamage.RecieveType,
 }
 
@@ -93,6 +93,40 @@ export type AttackOutcome = {
 	Amount: number,
 	-- What the target made of the hit. Missing for a hit that whiffed, as there was no one to receive it.
 	RecieveType: TypeDamage.RecieveType?,
+	-- The special the target says was applied (Vitality may have turned it into another). Missing when the hit had none, or
+	-- did not land.
+	Special: TypeDamage.DamageSpecial?,
+}
+
+-- This character's attack bounced off another: neither did anything, and the attack was cancelled
+export type AttackBounced = {
+	-- Whoever made the other attack
+	Opponent: Model?,
+}
+
+-- One of this character's attacks is over (it got to swing at all)
+export type AttackEnded = {
+	Target: Model,
+	AttackName: string,
+	-- Every hit was played out. False when it was cut short (staggered, out of stamina for the next hit of a combo...).
+	Finished: boolean,
+}
+
+-- This character's guard was broken
+export type BlockBroken = {
+	-- Why, as the Block task gave it
+	Reason: string?,
+}
+
+-- A launch this character was in has ended
+export type LaunchEnded = {
+	-- It ran its course and the character got back up. False when it was cut short (death, the state taken away).
+	Recovered: boolean,
+}
+
+-- The Wander task picked a spot and is walking to it
+export type NewWanderPosition = {
+	Position: Vector3,
 }
 
 TypeCharacterEvents.Names = table.freeze({
@@ -166,6 +200,21 @@ TypeCharacterEvents.Names = table.freeze({
 		AttackDefended = "CombatAttackDefended",
 		-- It found the target out of range, or gone
 		AttackMissed = "CombatAttackMissed",
+		-- Payload: AttackBounced. Dispatched by Attacks on both sides of a bounce, in place of the outcomes above and of
+		-- DefenseSucceeded: nobody landed or defended anything
+		AttackBounced = "CombatAttackBounced",
+		-- Payload: AttackEnded. Dispatched by the Attack task as an attack that swung ends, however it ends
+		AttackEnded = "CombatAttackEnded",
+		-- Payload: BlockBroken. Dispatched by Damage once the character's guard is broken (BlockBreakState is Active)
+		BlockBroken = "CombatBlockBroken",
+		-- No payload. Dispatched by Damage as the character takes the launched state (it is being thrown)
+		Launched = "CombatLaunched",
+		-- Payload: LaunchEnded. Dispatched by Damage as the character gives the launched state back
+		LaunchEnded = "CombatLaunchEnded",
+	},
+	Wander = {
+		-- Payload: NewWanderPosition. Dispatched by the Wander task once a walk to a new spot has started
+		NewPosition = "NewWanderPosition",
 	},
 	Targetting = {
 		FocusedTargetChanged = "FocusedTargetChanged",
@@ -174,7 +223,18 @@ TypeCharacterEvents.Names = table.freeze({
 		TargetLost = "TargetLost",
 		-- No payload. Dispatched when the last known target is lost, after that target's TargetLost
 		AllTargetsLost = "AllTargetsLost",
-		TargetSpotted = "TargetSpotted"
+		TargetSpotted = "TargetSpotted",
+		-- No payload. Dispatched by the search task after every search, once its target events have gone out
+		SearchCompleted = "TargetSearchCompleted",
+		-- Payload: TargettingContext. Dispatched by Friends when a character on our team comes within our provoke range
+		TeammateSpotted = "TeammateSpotted",
+		-- Payload: TargettingContext. Dispatched by Friends when a teammate is gone (left our provoke range, died, was
+		-- removed, or we changed teams)
+		TeammateLost = "TeammateLost",
+		-- Payload: FriendContext. Dispatched by Friends when a connection is made, on both sides
+		FriendAdded = "FriendAdded",
+		-- Payload: FriendContext. Dispatched by Friends when a friend left the target registry or stopped sharing our team
+		FriendLost = "FriendLost",
 	}
 })
 

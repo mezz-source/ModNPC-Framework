@@ -1,9 +1,11 @@
 local TypeDefense = {}
 
 -- How a character met a hit it saw coming (an IncomingAttack stimulant). See Defense.
-export type Reaction = "Dodge" | "Block" | "Guarded" | "None"
+export type Reaction = "Parry" | "Dodge" | "Block" | "Guarded" | "None"
 
 TypeDefense.Reactions = table.freeze({
+	-- Parried it: an Intellect roll was made, and the parry goes off just before the hit so its window covers it
+	Parry = "Parry",
 	-- Dodged it: an Agility roll was made in time, and the dodge goes off just before the hit so its active span covers it
 	Dodge = "Dodge",
 	-- Raised a guard for it at the last moment: the dodge was out of time or its roll failed, and a block could still go up

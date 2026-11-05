@@ -115,6 +115,12 @@ function Distance:GetTooCloseDiff(): number
 	return if type(diff) == "number" then math.max(diff :: number, 0) else 0
 end
 
+-- The farthest a character can be and still be noticed (Ranges.Provoke), nil if unconfigured (no limit)
+function Distance:GetProvokeRange(): number?
+	local range = self.Configuration:GetRange("Provoke")
+	return if type(range) == "number" then range else nil
+end
+
 -- Studs between us and a character, nil if either has no root part
 function Distance:GetDistanceTo(target: Model): number?
 	return self.CharacterAPI:GetDistanceTo(target)

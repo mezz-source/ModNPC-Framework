@@ -17,6 +17,8 @@ local WELD_NAME = "WeaponWeld"
 local WELD_SETTINGS_NAME = "WeldSettings"
 local CHARACTER_PART_SETTING = "CharacterPartName0"
 local TOOL_PART_SETTING = "ToolPartName1"
+local TRAIL_NAME = "WeaponTrail"
+local USE_TRAIL_SETTING = { "WeaponSettings", "UseTrail" }
 
 local function response(
 	success: boolean,
@@ -292,6 +294,34 @@ function Weapon.getEquippedWeapon(character: Model): TypeModuleResponse.ModuleRe
 	end
 
 	return response(true, TypeRequests.Enums.StatusCode.Success, "No weapon equipped")
+end
+
+-- The part that stands for the weapon in the world: its model's PrimaryPart, or the welded tool part without one.
+-- Nil for anything that isn't a valid weapon.
+function Weapon._getPart(weapon: Instance): BasePart?
+	local parts = readWeapon(weapon)
+	return parts and parts.CollisionPart
+end
+
+-- The trail at the top of the weapon's model. Nil with no reason for a weapon that doesn't use one (UseTrail in its
+-- Config), nil with the reason when it can't be had: an invalid weapon, or one that uses a trail and has none.
+function Weapon._getTrail(weapon: Instance): (Trail?, string?)
+	local useTrail = Weapon.getWeaponSetting(weapon, USE_TRAIL_SETTING)
+	if not useTrail.Success then
+		return nil, useTrail.Message
+	end
+
+	if useTrail.Data ~= true then
+		return nil, nil
+	end
+
+	local parts = readWeapon(weapon) :: any
+	local trail = parts.WeaponModel:FindFirstChild(TRAIL_NAME)
+	if not trail or not trail:IsA("Trail") then
+		return nil, weapon.Name .. " has UseTrail on but no " .. TRAIL_NAME .. " at the top of its " .. WEAPON_MODEL_NAME
+	end
+
+	return trail, nil
 end
 
 function Weapon.init(_)

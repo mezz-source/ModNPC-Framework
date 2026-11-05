@@ -10,6 +10,7 @@ export type Cost =
 	| "BlockLight"
 	| "BlockMedium"
 	| "BlockHeavy"
+	| "Parry"
 
 TypeStamina.Costs = table.freeze({
 	Dodge = "Dodge",
@@ -23,6 +24,8 @@ TypeStamina.Costs = table.freeze({
 	BlockLight = "BlockLight",
 	BlockMedium = "BlockMedium",
 	BlockHeavy = "BlockHeavy",
+	-- What trying to parry costs, paid as it starts (see Parry). A parry that takes a hit gets it back and more.
+	Parry = "Parry",
 })
 
 -- The settings of a character's Config/Stamina folder that the Stamina module reads. A setting the folder doesn't have falls
@@ -46,14 +49,15 @@ TypeStamina.Settings = table.freeze({
 -- folder doesn't have is free.
 TypeStamina.CostSettings = table.freeze({
 	[TypeStamina.Costs.Dodge] = "DodgeConsumption",
-	[TypeStamina.Costs.LightAttack] = "LightAttackConsumption",
-	[TypeStamina.Costs.MediumAttack] = "MediumAttackConsumption",
-	[TypeStamina.Costs.HeavyAttack] = "HeavyAttackConsumption",
+	[TypeStamina.Costs.LightAttack] = "BaseLightAttackConsumption",
+	[TypeStamina.Costs.MediumAttack] = "BaseMediumAttackConsumption",
+	[TypeStamina.Costs.HeavyAttack] = "BaseHeavyAttackConsumption",
 	[TypeStamina.Costs.Sprint] = "SprintConsumption",
 	[TypeStamina.Costs.Stagger] = "StaggerConsumption",
 	[TypeStamina.Costs.BlockLight] = "BlockLightConsumption",
 	[TypeStamina.Costs.BlockMedium] = "BlockMediumConsumption",
 	[TypeStamina.Costs.BlockHeavy] = "BlockHeavyConsumption",
+	[TypeStamina.Costs.Parry] = "ParryConsumption",
 })
 
 -- The costs priced by the equipped weapon instead of the character: the same setting names, in the Config/Stamina folder of
@@ -62,6 +66,15 @@ TypeStamina.WeaponCosts = table.freeze({
 	[TypeStamina.Costs.BlockLight] = true,
 	[TypeStamina.Costs.BlockMedium] = true,
 	[TypeStamina.Costs.BlockHeavy] = true,
+	[TypeStamina.Costs.Parry] = true,
+})
+
+-- The costs priced by whatever they are paid for: bought for the equipped weapon they are this setting of its Config/Stamina
+-- folder (without a price there they are free), bought for anything else they are the character's own, see CostSettings.
+TypeStamina.SourceCosts = table.freeze({
+	[TypeStamina.Costs.LightAttack] = "WeaponLightAttackConsumption",
+	[TypeStamina.Costs.MediumAttack] = "WeaponMediumAttackConsumption",
+	[TypeStamina.Costs.HeavyAttack] = "WeaponHeavyAttackConsumption",
 })
 
 TypeStamina.Folder = "Stamina"

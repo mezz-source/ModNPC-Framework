@@ -111,7 +111,7 @@ function InstanceSearch.getPrimitiveValue(instance: Instance): (boolean, any, st
 
 	local value = (instance :: any).Value
 	local valueType = typeof(value)
-	if valueType ~= "boolean" and valueType ~= "number" and valueType ~= "string" then
+	if valueType ~= "boolean" and valueType ~= "number" and valueType ~= "string" and valueType ~= "Color3" then
 		return false, nil, "ValueBase does not contain a supported primitive"
 	end
 
