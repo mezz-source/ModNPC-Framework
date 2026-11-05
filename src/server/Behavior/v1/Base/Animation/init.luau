@@ -28,6 +28,9 @@ local DAMAGE_REACTIONS: { { Category: string, Priority: Enum.AnimationPriority }
 }
 
 local DEFAULT_FADE_TIME = 0.25
+-- How far the speed (studs/s) has to move from the last one the walk or sprint was set to before it is set again. The
+-- humanoid reports its speed many times a second, and tenths of a stud aren't anything anyone can see.
+local GAIT_SPEED_STEP = 1
 local STUD_FACTOR = 0.8
 
 local STEP_MARKER = "Step"
@@ -65,6 +68,9 @@ function Animation.new(Base: {}, character: Model)
 	self.trackSources = {}
 	-- Current speed relative to the configured WalkSpeed, used to scale footsteps (1 = at walk speed)
 	self.speedRatio = 1
+	-- Which of Walk or Sprint is playing, nil when neither is, and the speed it was last set to
+	self.gait = nil :: string?
+	self.gaitSpeed = 0
 	self.EventSubscriptions = {
 		self.Base.Events:Subscribe(HumanoidEvents.Running, function(speed: number)
 			self:_running(speed)
@@ -126,24 +132,36 @@ function Animation:_died()
 	end
 end
 
--- We already know its above 0.1
+-- We already know its above 0.1. This comes in many times a second, and every animation call is a request, so only what
+-- actually changed is asked for: the gait when it swaps, the speed when it moved enough to see.
 function Animation:_running(speed: number)
-	if speed >= self.sprintSpeedScale * STUD_FACTOR then
-		self:PlayAnimation("Sprint", DEFAULT_FADE_TIME, nil, true)
-		self:StopAnimation("Walk", DEFAULT_FADE_TIME)
-		self:AdjustSpeed("Sprint", speed / self.sprintSpeedScale)
-	else
-		self:PlayAnimation("Walk", DEFAULT_FADE_TIME, nil, true)
-		self:StopAnimation("Sprint", DEFAULT_FADE_TIME)
-		self:AdjustSpeed("Walk", speed / self.walkSpeedScale)
+	local sprinting = speed >= self.sprintSpeedScale * STUD_FACTOR
+	local gait = if sprinting then "Sprint" else "Walk"
+
+	local previous = self.gait
+	local swapped = gait ~= previous
+	if swapped then
+		self:PlayAnimation(gait, DEFAULT_FADE_TIME, nil, true)
+		if previous then
+			self:StopAnimation(previous, DEFAULT_FADE_TIME)
+		end
+		self.gait = gait
 	end
+
+	-- Playing a track puts it back at its normal speed, so a new gait always needs one
+	if swapped or math.abs(speed - self.gaitSpeed) >= GAIT_SPEED_STEP then
+		self.gaitSpeed = speed
+		self:AdjustSpeed(gait, speed / (if sprinting then self.sprintSpeedScale else self.walkSpeedScale))
+	end
+
 	self.speedRatio = speed / self.walkSpeedScale
 end
 
 -- Falls under 0.1
 function Animation:_stoppedMoving()
-	self:StopAnimation("Walk", DEFAULT_FADE_TIME)
-	self:StopAnimation("Sprint", DEFAULT_FADE_TIME)
+	if self.gait then
+		self:StopAnimation(self.gait, DEFAULT_FADE_TIME)
+	end
 end
 
 function Animation:_stateChanged(oldState: Enum.HumanoidStateType, newState: Enum.HumanoidStateType)
@@ -306,6 +324,11 @@ function Animation:PlayAnimation(
 end
 
 function Animation:StopAnimation(animName: string, fadeTime: number)
+	-- Whoever stopped it, the gait isn't playing anymore, so the next speed we hear of starts it again
+	if animName == self.gait then
+		self.gait = nil
+	end
+
 	self.Base.Events:Dispatch(AnimationEvents.AnimationStopped, {
 		AnimationName = animName,
 	})
@@ -342,6 +365,7 @@ function Animation:UnloadAllAnimations(fadeTime: number)
 	end
 	self.loadedTracks = {}
 	self.trackSources = {}
+	self.gait = nil
 end
 
 -- Unloads the tracks that were loaded from one content source, instantly: a weapon that is gone cannot fade out

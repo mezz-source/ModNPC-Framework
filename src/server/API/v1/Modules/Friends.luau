@@ -1,5 +1,6 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local CharacterDiscovery = require(script.Parent.CharacterDiscovery)
+local CharacterHandles = require(script.Parent.CharacterHandles)
 local CharacterUtility = require(script.Parent.CharacterUtility)
 local TypeFriends = require(ServerScriptService.ModNPCServer.Types.v1.TypeFriends)
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
@@ -101,7 +102,7 @@ function Friends.requestFriend(sender: Model, target: Model): TypeModuleResponse
 
 	local request: TypeFriends.FriendRequest = {
 		Sender = sender,
-		Team = CharacterUtility.getTeam(sender).Data,
+		Team = CharacterHandles._getTeam(sender),
 	}
 
 	local claim = claimPair(sender, target)

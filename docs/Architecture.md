@@ -51,11 +51,12 @@ The framework aims for NPCs whose behavior is **data driven, hookable, and isola
 
 ## 2. Communication: bindables, functions and events
 
-The framework has three communication systems. Each does a different job.
+The framework has three communication systems, and one way to read without communicating at all. Each does a different job.
 
 | System | Scope | Returns a value? | Use it for |
 |---|---|---|---|
 | **API request** (`CharacterAPI` → `Router` → `ModFunctions.Request` bindable → `API`) | Behavior → API | Yes (`APIResponse`), unless fire-and-forget | Anything that touches the world |
+| **Character handle** (`CharacterAPI:GetHandle`, `context.Handle`) | Behavior reading any character | Yes | Reading a character without a request: health, position, team, whether it can be targeted. Handles never change anything. See [Handles/Design.md](Handles/Design.md). |
 | **Functions** (`base.Functions:CallFunction`) | Inside one character | Yes | Actions and queries that mods should be able to intercept |
 | **Events** (`base.Events:Dispatch` / `Subscribe`) | Inside one character | No | Notifications that fan out to any number of listeners |
 
@@ -152,7 +153,7 @@ Why this matters:
 
 1. **One place validates and enforces.** The API checks the character is valid (and not `_UNLOADED`), the arguments are correct, and the operation is allowed. A bug in a task or a mod can't leave a Humanoid half-configured, because the task never had write access.
 2. **Damage stays honest.** `Damage` tells *registered* damage (through the API) apart from health that changed for other reasons. That's how a block can absorb a hit, or a stagger can be applied. If behavior code set `Humanoid.Health` directly, that bookkeeping would break.
-3. **Characters talk to each other through the API.** An attacker never reaches into its target's Base. It asks the API to deal damage, or to emit a stimulant, and the API delivers the result through the target's own binds (`ModNPC/_internal/_binds/CharacterFunction`, `CharacterEvent`, `CharacterStimulant`). Every character stays a sealed unit.
+3. **Characters talk to each other through the API.** An attacker never reaches into its target's Base. It asks the API to deal damage, or to emit a stimulant, and the API delivers the result through the target's own binds (`ModNPC/_internal/_binds/CharacterFunction`, `CharacterEvent`, `CharacterStimulant`). Every character stays a sealed unit. Reading is the one exception to going through a request: the API hands out a read-only **handle** for each character it tracks, which answers without a round trip and without saying what kind of character is behind it. A handle reads and never writes, so changes still go through the API.
 4. **The behavior is swappable.** Everything is versioned (`API/v1`, `Behavior/v1`, `Types/v1`), and the API only knows a character by its model and folder format. A different behavior implementation (or an adapter for some other NPC system later) can drive the same API without changes on the API side. Keep that boundary clean: no ModNPC-specific shortcuts in generic API modules.
 5. **Errors are contained.** A failing API module returns an error response instead of crashing the caller. A failing task is stopped by the scheduler. A failing mod `init` logs a warning and the character still starts.
 

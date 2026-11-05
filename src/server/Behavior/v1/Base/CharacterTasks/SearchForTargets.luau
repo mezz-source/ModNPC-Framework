@@ -3,7 +3,6 @@ local TypeTask = require(ServerScriptService.ModNPCServer.Types.v1.TypeTask)
 local Task = require(script.Parent.Parent.Task)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
-local TypeTeams = require(ServerScriptService.ModNPCServer.Types.v1.TypeTeams)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
 
@@ -14,8 +13,6 @@ local TargettingEvents = TypeCharacterEvents.Names.Targetting
 local CategoryEnum = TypeTask.CategoriesEnum
 local Dependencies = TypeTask.Dependencies
 local ResourceEnum = TypeTask.ResourcesEnum
-
-local NEUTRAL_TEAM = TypeTeams.CoreTeams.Neutral
 
 local SearchTask = {}
 SearchTask.__index = SearchTask
@@ -99,31 +96,33 @@ function SearchTask:UpdateFocusTarget()
 	end
 end
 
--- Targets we are allowed to consider: everyone if neutral, otherwise only non-matching teams,
--- and only those within the provoke range. This runs every search, so a target that walks out of range
--- drops out of our known targets (and our focus) instead of being chased forever.
+-- Targets we are allowed to consider: whoever we are hostile to that hasn't taken itself off the target list, and only those
+-- within the provoke range. This runs every search, so a target that walks out of range drops out of our known targets (and
+-- our focus) instead of being chased forever. Each one comes with its handle, for whoever hears about it next.
 function SearchTask:GetViableTargets(): { TypeTargetting.TargettingContext }
-	local candidates
-	local team = self.CharacterAPI:GetTeam()
-	if team and team ~= NEUTRAL_TEAM then
-		candidates = self.CharacterAPI:GetOpposingTargets()
-	else
-		candidates = {}
-		for _, context in self.CharacterAPI:GetAllTargets() do
-			if context.Character ~= self.CharacterAPI.Character then
-				table.insert(candidates, context)
-			end
-		end
+	local us = self.CharacterAPI:GetHandle()
+	if not us then
+		return {}
 	end
+
+	local contexts = self.CharacterAPI:GetAllTargets()
+	local characters = {}
+	for _, context in contexts do
+		table.insert(characters, context.Character)
+	end
+	local handles = self.CharacterAPI:GetHandles(characters)
 
 	local provokeRange = self.Distance:GetProvokeRange()
-	if not provokeRange then
-		return candidates
-	end
-
 	local viable = {}
-	for _, context in candidates do
-		if self.Distance:IsWithin(context.Character, provokeRange) then
+	for _, context in contexts do
+		local handle = handles[context.Character]
+		if
+			handle
+			and us:IsHostile(handle)
+			and handle:IsTargetable()
+			and (not provokeRange or self.Distance:IsWithin(context.Character, provokeRange))
+		then
+			context.Handle = handle
 			table.insert(viable, context)
 		end
 	end

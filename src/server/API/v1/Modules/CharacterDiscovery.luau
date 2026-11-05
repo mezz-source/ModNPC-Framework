@@ -41,6 +41,11 @@ local function untrack(character: Model)
 end
 
 local function track(character: Model, humanoid: Humanoid)
+	-- A character being started is tracked right away (_ensureTracked), and may be waiting out its validation here as well
+	if tracked[character] then
+		return
+	end
+
 	-- We allow unloaded characters so that instanced ModNPCs don't get incorrectly marked as generics
 	-- due to the unload flag deeper in type checks
 	local allowUnloaded = true
@@ -127,6 +132,15 @@ end
 
 function CharacterDiscovery._isTracked(character: Model): boolean
 	return tracked[character] ~= nil
+end
+
+-- For a character being started: everything that listens here hears of it before it runs its first line, instead of whenever
+-- the search for humanoids gets to it. Same rules as being found: it has to be alive and in the workspace.
+function CharacterDiscovery._ensureTracked(character: Model)
+	local humanoid = CharacterUtility._getHumanoid(character)
+	if humanoid and character:IsDescendantOf(workspace) and CharacterUtility.isValidCharacter(character).Data then
+		track(character, humanoid)
+	end
 end
 
 -- character -> its type, a copy

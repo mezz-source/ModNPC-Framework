@@ -347,13 +347,6 @@ end
 
 function ConfigurationNetwork.init(network)
 	contentDeliveryNetwork = network
-
-	-- This is a bit of a nasty depend chain, but configuration knows the game here
-	-- FIX-ME: there's gotta be a better way of doing this
-	CharacterUtility.setTeamGetter(function(character: Model): TypeModuleResponse.ModuleResponse
-		return ConfigurationNetwork.getTeamSetting(character, "TeamName")
-	end)
-
 end
 
 -- This module serves ModNPC characters, so its Config directory is held to the ModNPC schema.

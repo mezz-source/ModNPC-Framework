@@ -155,6 +155,11 @@ end
 
 function API.startCharacter(character: Model)
 	print("Starting character: " .. character.Name)
+	if not isReady then
+		yieldUntilReady()
+	end
+	-- Its handle is made as it is tracked, and the character reads itself through that from its first line
+	getModule("CharacterDiscovery")._ensureTracked(character)
 	return Base.new(character)
 end
 

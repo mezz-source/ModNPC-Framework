@@ -5,6 +5,7 @@ local TypeBars = require(ServerScriptService.ModNPCServer.Types.v1.TypeBars)
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
+local TypeCharacterHandle = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterHandle)
 local TypeDialogueFrame = require(ServerScriptService.ModNPCServer.Types.v1.TypeDialogueFrame)
 local TypeFriends = require(ServerScriptService.ModNPCServer.Types.v1.TypeFriends)
 local TypeHighlights = require(ServerScriptService.ModNPCServer.Types.v1.TypeHighlights)
@@ -23,6 +24,7 @@ type Module = TypeAPIFunctions.Module
 local Modules = TypeAPIFunctions.Modules
 local Functions = TypeAPIFunctions.Functions
 local CharacterFunctions = Functions.CharacterUtility
+local HandleFunctions = Functions.CharacterHandles
 local DamageFunctions = Functions.Damage
 local MovementFunctions = Functions.Movement
 local WeaponEvents = TypeCharacterEvents.Names.Weapon
@@ -541,12 +543,22 @@ function CharacterAPI:GetTargetsOfType(characterType: string): { TypeTargetting.
 	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetTargetsOfType, { characterType }) or {}
 end
 
+-- The reads below go through the character's handle, so they don't cost a request. A character that was never tracked has
+-- none, and is asked of the API instead.
+
 function CharacterAPI:GetTeam(): string?
-	return self:RequestAPIData(Modules.CharacterUtility, CharacterFunctions.GetTeam, { self.Character })
+	local handle = self:GetHandle()
+	return if handle then handle:GetTeam() else nil
 end
 
 -- Root part to root part distance in studs between two characters, nil if either has no root
 function CharacterAPI:GetDistanceBetween(from: Model, to: Model): number?
+	local fromHandle = if from then self:GetHandle(from) else nil
+	local toHandle = if to then self:GetHandle(to) else nil
+	if fromHandle and toHandle then
+		return fromHandle:GetDistanceTo(toHandle)
+	end
+
 	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetDistance, { from, to })
 end
 
@@ -557,15 +569,31 @@ end
 
 -- Distance from this character's root part to a point in the world, nil if it has no root
 function CharacterAPI:GetDistanceToPosition(position: Vector3): number?
+	local handle = self:GetHandle()
+	local here = if handle then handle:GetPosition() else nil
+	if here and typeof(position) == "Vector3" then
+		return (here - position).Magnitude
+	end
+
 	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetDistanceToPosition, { self.Character, position })
 end
 
 -- Health queries default to this character when no character is given
 function CharacterAPI:GetHealth(character: Model?): number?
+	local handle = self:GetHandle(character)
+	if handle then
+		return handle:GetHealth()
+	end
+
 	return self:RequestAPIData(Modules.CharacterUtility, CharacterFunctions.GetHealth, { character or self.Character })
 end
 
 function CharacterAPI:GetMaxHealth(character: Model?): number?
+	local handle = self:GetHandle(character)
+	if handle then
+		return handle:GetMaxHealth()
+	end
+
 	return self:RequestAPIData(
 		Modules.CharacterUtility,
 		CharacterFunctions.GetMaxHealth,
@@ -574,6 +602,11 @@ function CharacterAPI:GetMaxHealth(character: Model?): number?
 end
 
 function CharacterAPI:GetHealthInfo(character: Model?): TypeTargetting.HealthInfo?
+	local handle = self:GetHandle(character)
+	if handle then
+		return handle:GetHealthInfo()
+	end
+
 	return self:RequestAPIData(
 		Modules.CharacterUtility,
 		CharacterFunctions.GetHealthInfo,
@@ -583,6 +616,11 @@ end
 
 -- Whether a character is exhausted right now (this character when none is given). Anything without stamina is not.
 function CharacterAPI:IsExhausted(character: Model?): boolean
+	local handle = self:GetHandle(character)
+	if handle then
+		return handle:IsExhausted()
+	end
+
 	return self:RequestAPIData(
 		Modules.CharacterUtility,
 		CharacterFunctions.IsExhausted,
@@ -592,6 +630,11 @@ end
 
 -- Whether a character is staggered right now (this character when none is given). Anything that can't be is not.
 function CharacterAPI:IsStaggered(character: Model?): boolean
+	local handle = self:GetHandle(character)
+	if handle then
+		return handle:IsStaggered()
+	end
+
 	return self:RequestAPIData(
 		Modules.CharacterUtility,
 		CharacterFunctions.IsStaggered,
@@ -640,6 +683,72 @@ function CharacterAPI:RequestFriend(target: Model): TypeFriends.FriendOutcome
 		or TypeFriends.Outcomes.Failed
 end
 
+-- Handles
+
+-- A read-only view of a character (this character when none is given), see TypeCharacterHandle. The API made it when it
+-- tracked the character and we keep what it gives us, so asking again costs nothing. Nil if the character was never tracked.
+function CharacterAPI:GetHandle(character: Model?): TypeCharacterHandle.CharacterHandle?
+	local model = character or self.Character
+	local handle = self.Handles[model]
+	if handle then
+		return handle
+	end
+
+	handle = self:RequestAPIData(Modules.CharacterHandles, HandleFunctions.GetHandle, { model })
+	if handle then
+		self:_forgetDestroyedHandles()
+		self.Handles[model] = handle
+	end
+
+	return handle
+end
+
+-- The handles of a list of characters, keyed by character, in at most one request. Whoever has none is left out.
+function CharacterAPI:GetHandles(characters: { Model }): { [Model]: TypeCharacterHandle.CharacterHandle }
+	local handles = {}
+	local unknown = {}
+	for _, character in characters do
+		local handle = self.Handles[character]
+		if handle then
+			handles[character] = handle
+		else
+			table.insert(unknown, character)
+		end
+	end
+
+	if #unknown == 0 then
+		return handles
+	end
+
+	local received = self:RequestAPIData(Modules.CharacterHandles, HandleFunctions.GetHandles, { unknown })
+	if type(received) ~= "table" then
+		return handles
+	end
+
+	self:_forgetDestroyedHandles()
+	for index, character in unknown do
+		local handle = received[index]
+		if handle then
+			self.Handles[character] = handle
+			handles[character] = handle
+		end
+	end
+
+	return handles
+end
+
+-- Asks the API to take this character off the target list for a reason, until that reason is released. Returns whether that
+-- changed anything. Not an immunity, see TypeCharacterHandle.IsTargetable.
+function CharacterAPI:HoldUntargetable(reason: string): boolean
+	return self:RequestAPIData(Modules.CharacterHandles, HandleFunctions.HoldUntargetable, { self.Character, reason }) == true
+end
+
+-- Asks the API to let go of one reason. The character is back on the target list once it has none left.
+function CharacterAPI:ReleaseUntargetable(reason: string): boolean
+	return self:RequestAPIData(Modules.CharacterHandles, HandleFunctions.ReleaseUntargetable, { self.Character, reason })
+		== true
+end
+
 -- Requests
 
 -- noResponse skips building/returning a response table; returns nil and failures are only warned by the API
@@ -677,6 +786,16 @@ end
 	INTERNAL
 ]]
 
+-- Run when a new character turns up rather than on a timer: what we keep can only outgrow the characters still around by
+-- what died since the last new one.
+function CharacterAPI:_forgetDestroyedHandles()
+	for character, handle in self.Handles do
+		if character.Parent == nil and not handle:IsValid() then
+			self.Handles[character] = nil
+		end
+	end
+end
+
 function CharacterAPI:_withoutSelf(targets: { TypeTargetting.TargettingContext }): { TypeTargetting.TargettingContext }
 	local filtered = {}
 	for _, context in targets do
@@ -698,6 +817,8 @@ function CharacterAPI.new(Base: {}, character: Model)
 	self.FunctionConnection = nil
 	self.EventConnection = nil
 	self.ModScripts = nil
+	-- What the API gave us, keyed by character
+	self.Handles = {} :: { [Model]: TypeCharacterHandle.CharacterHandle }
 	return self
 end
 

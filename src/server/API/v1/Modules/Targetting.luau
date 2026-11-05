@@ -1,5 +1,6 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local CharacterDiscovery = require(script.Parent.CharacterDiscovery)
+local CharacterHandles = require(script.Parent.CharacterHandles)
 local CharacterUtility = require(script.Parent.CharacterUtility)
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
@@ -29,7 +30,7 @@ local function registerTarget(character: Model, characterType: string)
 	targets[character] = {
 		Character = character,
 		Type = characterType,
-		Team = CharacterUtility.getTeam(character).Data,
+		Team = CharacterHandles._getTeam(character),
 	}
 end
 
@@ -39,7 +40,9 @@ end
 
 local function collect(predicate: (TypeTargetting.TargettingContext) -> boolean): { TypeTargetting.TargettingContext }
 	local result = {}
-	for _, context in targets do
+	for character, context in targets do
+		-- teams change, so what a context says is only as old as this read
+		context.Team = CharacterHandles._getTeam(character)
 		if predicate(context) then
 			table.insert(result, context)
 		end

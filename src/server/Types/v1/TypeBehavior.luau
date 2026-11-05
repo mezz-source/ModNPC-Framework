@@ -3,6 +3,7 @@ local TypeAttack = require(ServerScriptService.ModNPCServer.Types.v1.TypeAttack)
 local TypeBars = require(ServerScriptService.ModNPCServer.Types.v1.TypeBars)
 local TypeDialogueFrame = require(ServerScriptService.ModNPCServer.Types.v1.TypeDialogueFrame)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
+local TypeCharacterHandle = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterHandle)
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeDamage = require(ServerScriptService.ModNPCServer.Types.v1.TypeDamage)
 local TypeDefense = require(ServerScriptService.ModNPCServer.Types.v1.TypeDefense)
@@ -370,6 +371,10 @@ export type CharacterAPI = {
 	GetTargetsExcludingTeams: (self: CharacterAPI, teams: { string }) -> { TypeTargetting.TargettingContext },
 	GetOpposingTargets: (self: CharacterAPI) -> { TypeTargetting.TargettingContext },
 	GetSameTeamTargets: (self: CharacterAPI) -> { TypeTargetting.TargettingContext },
+	GetHandle: (self: CharacterAPI, character: Model?) -> TypeCharacterHandle.CharacterHandle?,
+	GetHandles: (self: CharacterAPI, characters: { Model }) -> { [Model]: TypeCharacterHandle.CharacterHandle },
+	HoldUntargetable: (self: CharacterAPI, reason: string) -> boolean,
+	ReleaseUntargetable: (self: CharacterAPI, reason: string) -> boolean,
 }
 
 export type Events = {

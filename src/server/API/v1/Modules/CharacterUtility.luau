@@ -21,7 +21,6 @@ type StimulantSpec = TypeStimulant.StimulantSpec
 type ModuleResponse = TypeModuleResponse.ModuleResponse
 
 local contentValidationFunction: (Model) -> ModuleResponse = nil
-local teamGetterFunction: (Model) -> ModuleResponse = nil
 
 CharacterUtility.Type = {
 	Generic = "Generic",
@@ -89,7 +88,7 @@ local function ensureFocusAlignment(character: Model): AlignOrientation?
 		focusAlignment = nil
 	end
 
-	-- This runs on every character validation (team lookups, target searches, ...), not just once.
+	-- This runs on every character validation, not just once.
 	-- Enabled belongs to Movement.lockRotation/unlockRotation, so it is only defaulted when we create the alignment,
 	-- otherwise the next validation would switch an active focus alignment back off.
 	local created = false
@@ -304,27 +303,9 @@ local function getCharacterType(character: Model, allowUnloaded: boolean?): (Cha
 	return CharacterUtility.Type.Generic, "Character has no " .. ROOT_FOLDER_NAME .. " folder"
 end
 
-local function getCharacterTeam(character: Model): string
-	local allowUnloaded = true
-	local characterType = getCharacterType(character, allowUnloaded)
-	if characterType == CharacterUtility.Type.ModNPC then
-		local returnData = teamGetterFunction(character).Data -- {"Name": "xyz", "Value": "teamname"}
-		return returnData.Value :: string
-	else
-		-- We're going to do broad checks to see if we can pick up legacy values/indicators
-		-- warn("No team integration for non-mods yet", characterType, teamGetterFunction)
-	end
-
-	return "Neutral"
-end
-
 -- This will allow the content delivery network passthrough
 function CharacterUtility.setContentValidator(fn: (Model) -> ModuleResponse)
 	contentValidationFunction = fn
-end
-
-function CharacterUtility.setTeamGetter(fn: (Model) -> ModuleResponse)
-	teamGetterFunction = fn
 end
 
 function CharacterUtility.getCharacterType(character: Model, allowUnloaded: boolean?): TypeModuleResponse.ModuleResponse
@@ -335,11 +316,6 @@ function CharacterUtility.getCharacterType(character: Model, allowUnloaded: bool
 		"Character type retrieved successfully",
 		(getCharacterType(character, allowUnloaded))
 	)
-end
-
-function CharacterUtility.getTeam(character: Model): TypeModuleResponse.ModuleResponse
-	local teamName = getCharacterTeam(character)
-	return response(true, true, TypeRequests.Enums.StatusCode.Success, "Team retrieved successfully", teamName)
 end
 
 function CharacterUtility.getForceField(character: Model): TypeModuleResponse.ModuleResponse
@@ -646,8 +622,7 @@ function CharacterUtility._getStimulantBind(character: Model): BindableEvent?
 end
 
 function CharacterUtility._validationReady(): boolean
-	local isReady = teamGetterFunction and contentValidationFunction
-	return isReady
+	return contentValidationFunction ~= nil
 end
 
 function CharacterUtility.init(api: {}?)

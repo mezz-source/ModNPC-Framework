@@ -15,7 +15,7 @@
 
 #### 1b. Conversation system
 
-- [ ] When an NPC has a conversation, they become invalid targets and go through each other's lines
+- [ ] When an NPC has a conversation, they become invalid targets and go through each other's lines (invalid targets: `HoldUntargetable` is built; the API should claim the pair the way friend requests do, and each side holds itself)
 - [ ] NPCs in dialogue enter a frozen thinking state and cancel their current actions
 - [ ] Ensure dialogue markup events are hookable via mod scripts
 
@@ -50,7 +50,7 @@ We have a targetting system, we just need to build some broadcasts and a base be
 - [ ] Build a base friend module with various utilities (like getting nearest friends) (`Friends` exists with `GetTeammates`/`IsTeammate`/`GetTeammateDistance`; utilities still to come)
 - [x] Spot targets with matching teams and add them to a friends list (`Friends`, synced after each search, limited to the provoke range)
 - [x] Friend connection handshake: API `Friends` module locks the pair and carries the request, Base `Friends` asks and answers (`RequestFriend`/`ReceiveFriendRequest`), once per pair; friends are remembered out of range
-- [ ] Listen for events indicating they change teams
+- [ ] Listen for events indicating they change teams (the search and `Friends` already pick a team change up on their next pass; this is for reacting to it the moment it happens)
 - [ ] Listen for events where a friendly dies
 - [ ] Add a wander preference for patrolling around a friend instead of randomly
 - [ ] Target spotting can play a different line depending on if a friend spotted them first or not (Individual/Teamed switch)
@@ -92,7 +92,11 @@ We have a targetting system, we just need to build some broadcasts and a base be
 
 ### 3. Character Handles
 
-- [ ] Create a character cross-talk abstraction called `CharacterHandle`, which can eventually translate capabilities (e.g. conversations, damage events) without knowing specific NPC types.
+- [x] Create a character cross-talk abstraction called `CharacterHandle`: read-only, minted by the API as it tracks a character, reachable through `CharacterAPI:GetHandle` and `context.Handle` (see [docs/Handles/Design.md](docs/Handles/Design.md))
+- [x] ModNPC and Generic adapters
+- [x] Published targetability (`HoldUntargetable` / `ReleaseUntargetable`), ready for the conversation system
+- [ ] Fill in the stub adapters (`Jeff`, `MainScript`, `StandardV1`, `StandardV2` in `CharacterHandles/Adapters`): needs how to recognize each one, where it keeps its team, and what can be asked of it
+- [ ] Move the acts that still fork on ModNPC (`Damage.takeDamage`, `Stimulants.buildReceiver`) into adapters
 
 - [ ] Allow conversating with Standard v1 and MainScript NPCs (because funny)
 

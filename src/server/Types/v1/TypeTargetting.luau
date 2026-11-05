@@ -1,17 +1,17 @@
+local TypeCharacterHandle = require(script.Parent.TypeCharacterHandle)
+
 local TypeTargetting = {}
 
 export type TargettingContext = {
 	Character: Model,
 	Type: string,
+	-- As of the read that made this context. The handle always has the current one.
 	Team: string,
+	-- Read the target through this. Set on the contexts the search and Friends hand out, not on what the API returns.
+	Handle: TypeCharacterHandle.CharacterHandle?,
 }
 
-export type HealthInfo = {
-	Health: number,
-	MaxHealth: number,
-	-- Health / MaxHealth, clamped to 0..1 (0 if MaxHealth is not positive)
-	Fraction: number,
-}
+export type HealthInfo = TypeCharacterHandle.HealthInfo
 
 export type TargettingPreference = 
 "ShortestDistance" |

@@ -3,14 +3,11 @@ local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.Ty
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeFriends = require(ServerScriptService.ModNPCServer.Types.v1.TypeFriends)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
-local TypeTeams = require(ServerScriptService.ModNPCServer.Types.v1.TypeTeams)
 
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local TargettingEvents = TypeCharacterEvents.Names.Targetting
 local HumanoidEvents = TypeCharacterEvents.Names.Humanoid
 local Outcomes = TypeFriends.Outcomes
-
-local NEUTRAL_TEAM = TypeTeams.CoreTeams.Neutral
 
 local Friends = {}
 Friends.__index = Friends
@@ -51,13 +48,29 @@ function Friends.new(Base: any, _: Model)
 	return self
 end
 
--- Everyone on our team, at any distance. Neutral is nobody's side: the search treats other neutrals as targets, so they
--- can't be teammates as well.
+-- Everyone we are allied to, at any distance, each with its handle
 function Friends:_getSameTeam(): { TypeTargetting.TargettingContext }
-	if self.CharacterAPI:GetTeam() == NEUTRAL_TEAM then
+	local us = self.CharacterAPI:GetHandle()
+	if not us then
 		return {}
 	end
-	return self.CharacterAPI:GetSameTeamTargets()
+
+	local contexts = self.CharacterAPI:GetAllTargets()
+	local characters = {}
+	for _, context in contexts do
+		table.insert(characters, context.Character)
+	end
+	local handles = self.CharacterAPI:GetHandles(characters)
+
+	local allies = {}
+	for _, context in contexts do
+		local handle = handles[context.Character]
+		if handle and us:IsAlly(handle) then
+			context.Handle = handle
+			table.insert(allies, context)
+		end
+	end
+	return allies
 end
 
 function Friends:_withinProvokeRange(contexts: { TypeTargetting.TargettingContext }): { TypeTargetting.TargettingContext }
@@ -119,8 +132,8 @@ function Friends:_sync()
 end
 
 function Friends:_isLiving(character: Model?): boolean
-	local health = self.CharacterAPI:GetHealth(character)
-	return health ~= nil and health > 0
+	local handle = self.CharacterAPI:GetHandle(character)
+	return handle ~= nil and handle:IsAlive()
 end
 
 function Friends:_addFriend(character: Model, team: string, initiated: boolean)
@@ -132,6 +145,7 @@ function Friends:_addFriend(character: Model, team: string, initiated: boolean)
 		Character = character,
 		Team = team,
 		Initiated = initiated,
+		Handle = self.CharacterAPI:GetHandle(character),
 	}
 	self.Friends[character] = friend
 	self.Events:Dispatch(TargettingEvents.FriendAdded, friend)
@@ -191,7 +205,7 @@ end
 
 -- Another character asked us to connect (the API calls it). Accepted regardless of whether we've spotted them: being asked
 -- is enough. We only decline if something changed in the moment the request took to get here. Sender first: a dead
--- character's team reads as Neutral, which would pass for a team change.
+-- character is nobody's ally, which would pass for a team change.
 function Friends:ReceiveFriendRequest(request: TypeFriends.FriendRequest): TypeFriends.FriendOutcome
 	if not self:_isLiving() then
 		return Outcomes.ReceiverDead
@@ -200,8 +214,8 @@ function Friends:ReceiveFriendRequest(request: TypeFriends.FriendRequest): TypeF
 		return Outcomes.SenderDead
 	end
 
-	local team = self.CharacterAPI:GetTeam()
-	if team == NEUTRAL_TEAM or team ~= request.Team then
+	local us = self.CharacterAPI:GetHandle()
+	if not us or not us:IsAlly(request.Sender) then
 		return Outcomes.TeamMismatch
 	end
 

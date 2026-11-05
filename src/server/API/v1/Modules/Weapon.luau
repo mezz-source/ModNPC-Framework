@@ -231,19 +231,28 @@ function Weapon.dropWeapon(character: Model, weapon: Instance): TypeModuleRespon
 end
 
 -- Reads one setting out of the weapon's Config directory, e.g. { "WeaponSettings", "AlwaysArmed" }. Data is its value.
+-- Only finds the setting, it doesn't validate the weapon: stamina prices are read through here many times a second, and a
+-- full validation walks every attack the weapon has. Equipping is what validates it.
 function Weapon.getWeaponSetting(weapon: Instance, path: { string }): TypeModuleResponse.ModuleResponse
-	local info, message = readWeapon(weapon)
-	if not info then
-		return response(false, TypeRequests.Enums.StatusCode.MalformedRequest, message)
+	if typeof(weapon) ~= "Instance" then
+		return response(false, TypeRequests.Enums.StatusCode.MalformedRequest, "Weapon is not an Instance")
+	end
+
+	local modWeapon = ModFolder.find(weapon, MODWEAPON_KIND)
+	if not modWeapon then
+		return response(
+			false,
+			TypeRequests.Enums.StatusCode.MalformedRequest,
+			"Weapon has no " .. MODWEAPON_KIND .. " folder"
+		)
 	end
 
 	if typeof(path) ~= "table" or #path == 0 then
 		return response(false, TypeRequests.Enums.StatusCode.MalformedRequest, "Setting path must be a list of names")
 	end
 
-	local modWeapon = ModFolder.find(weapon, MODWEAPON_KIND) :: Folder
-	local configuration = modWeapon[CharacterUtility.CoreFolderNames.Configuration]
-	local setting = InstanceSearch.findPath(configuration, path, "ValueBase")
+	local configuration = modWeapon:FindFirstChild(CharacterUtility.CoreFolderNames.Configuration)
+	local setting = configuration and InstanceSearch.findPath(configuration, path, "ValueBase")
 	if not setting then
 		return response(
 			false,
@@ -315,8 +324,8 @@ function Weapon._getTrail(weapon: Instance): (Trail?, string?)
 		return nil, nil
 	end
 
-	local parts = readWeapon(weapon) :: any
-	local trail = parts.WeaponModel:FindFirstChild(TRAIL_NAME)
+	local weaponModel = weapon:FindFirstChild(WEAPON_MODEL_NAME)
+	local trail = weaponModel and weaponModel:FindFirstChild(TRAIL_NAME)
 	if not trail or not trail:IsA("Trail") then
 		return nil, weapon.Name .. " has UseTrail on but no " .. TRAIL_NAME .. " at the top of its " .. WEAPON_MODEL_NAME
 	end

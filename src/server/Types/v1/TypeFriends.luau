@@ -1,3 +1,5 @@
+local TypeCharacterHandle = require(script.Parent.TypeCharacterHandle)
+
 local TypeFriends = {}
 
 -- What the API carries from the character asking to the character asked. The Team is read as the request goes out, so the
@@ -13,6 +15,8 @@ export type FriendContext = {
 	Team: string,
 	-- Whether we were the one who asked
 	Initiated: boolean,
+	-- Read the friend through this
+	Handle: TypeCharacterHandle.CharacterHandle?,
 }
 
 export type FriendOutcome = "Accepted" | "TeamMismatch" | "SenderDead" | "ReceiverDead" | "Busy" | "Failed"

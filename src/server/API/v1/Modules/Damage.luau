@@ -1,4 +1,5 @@
 local ServerScriptService = game:GetService("ServerScriptService")
+local CharacterHandles = require(script.Parent.CharacterHandles)
 local CharacterUtility = require(script.Parent.CharacterUtility)
 local TypeModuleResponse = require(ServerScriptService.ModNPCServer.Types.v1.TypeModuleResponse)
 local TypeRequests = require(ServerScriptService.ModNPCServer.Types.v1.TypeRequests)
@@ -94,7 +95,7 @@ function Damage.takeDamage(
 		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Max stagger time must be zero or more seconds")
 	end
 
-	local characterType = CharacterUtility.getCharacterType(receiver).Data
+	local characterType = CharacterHandles._getCharacterType(receiver)
 	if not characterType then
 		return response(false, true, TypeRequests.Enums.StatusCode.Conflict, "Receiver is not a valid character")
 	end

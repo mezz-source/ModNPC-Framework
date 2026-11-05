@@ -271,6 +271,8 @@ Mods never change instances through the Humanoid or the model. They ask the API,
 | Find targets | `GetOpposingTargets()`, `GetSameTeamTargets()`, `GetAllTargets()`, `GetTargetsOfType(type)` |
 | Distances | `GetDistanceTo(model)`, `GetDistanceToPosition(position)` |
 | Team, status | `GetTeam()`, `IsExhausted(model?)`, `IsStaggered(model?)` |
+| Read a character | `GetHandle(model?)` returns its read-only handle. See [Reading other characters](#reading-other-characters). |
+| Leave the target list | `HoldUntargetable(reason)`, then `ReleaseUntargetable(reason)`. See [Reading other characters](#reading-other-characters). |
 | Hurt another character | `DealDamage(receiver, amount, damageType?, special?, maxStaggerTime?, attackWeight?)`. Normally an attack does this. |
 | Push | `ApplyImpulse`, `PushAway(target, force)` |
 
@@ -373,9 +375,51 @@ base.State:Set("TauntState", TauntEnum.Taunting)   -- dispatches State.Changed w
 
 ---
 
+## Reading other characters
+
+A **handle** is a read-only view of one character. It answers questions without a request, and without you knowing whether the character is a ModNPC, a player or a plain rig.
+
+Most of the time one is already there. Every target context the search or `Friends` hands out carries one, so prefer `context.Handle`:
+
+```luau
+base.Events:Subscribe(Events.Targetting.NewFocusTarget, function(context)
+	local handle = context.Handle
+	local us = base.CharacterAPI:GetHandle()
+	if handle and us and us:IsHostile(handle) then
+		print(handle:GetModel().Name, handle:GetTeam(), handle:GetHealth())
+	end
+end)
+```
+
+For any other character, `base.CharacterAPI:GetHandle(model)` gets its handle, and `GetHandle()` gets this character's own. They are kept after the first time, so asking again costs nothing. Contexts straight from the API, such as `GetAllTargets()`, don't carry one.
+
+| Read | Methods | Notes |
+|---|---|---|
+| Who and where | `GetModel`, `GetRootPart`, `GetPosition`, `GetDistanceTo(other)` | `other` is a handle or a model |
+| Alive | `IsValid`, `IsAlive` | `IsValid` is whether the character is still tracked |
+| Health | `GetHealth`, `GetMaxHealth`, `GetHealthInfo` | |
+| Team | `GetTeam`, `IsAlly(other)`, `IsHostile(other)` | Neutral is nobody's ally. Both are false for a removed character and for the character itself. |
+| Target list | `IsTargetable` | |
+| Asks | `IsStaggered`, `IsExhausted` | These call into the character's own engine and can yield, so keep them conditional |
+
+Nothing here needs guarding. No method throws. A read that can't answer gives `nil` for a number and `false` for a yes or no, so a plain rig is simply never staggered. A character that died keeps answering, with `IsValid()` false and the team it last had.
+
+Handles only read. To change something, ask the API. One request goes with them, as `IsTargetable` reads its result: asking to leave the target list.
+
+```luau
+base.CharacterAPI:HoldUntargetable("MyMod_Vanish")   -- searches stop picking this character
+base.CharacterAPI:ReleaseUntargetable("MyMod_Vanish")
+```
+
+Holds are kept by reason, so prefix yours: the character is back on the list once every reason is released. It isn't an immunity, as hits still land. Searches respect it, and your own code can check `IsTargetable()`. Death clears all holds.
+
+[09_HandleReads](Example%20Scripts/09_HandleReads.luau) does all of this on a live character.
+
+---
+
 ## Talking to other characters
 
-Characters never read each other's state. If a mod wants another character to *know* something, it sends a **stimulant**: a named fact with a recipient, a priority and an expiry. The recipient queues it and decides on its own reaction tick what to do about it.
+Characters read each other through handles, but they never reach into each other's Base. If a mod wants another character to *know* something, it sends a **stimulant**: a named fact with a recipient, a priority and an expiry. The recipient queues it and decides on its own reaction tick what to do about it.
 
 ```luau
 base:NewStimulant("Intimidated")
@@ -451,6 +495,8 @@ luau-lsp analyze --definitions="$G/globalTypes.PluginSecurity.d.luau" --sourcema
 | `attempt to index nil` reading `base.Humanoid.Health` | `base.Humanoid` is the Humanoid module. Use `base.CharacterAPI:GetHealthInfo()`. |
 | The console floods with an instance dump | A payload field such as `Attacker` is a `Model`. Print its `Name`. |
 | A mod reacts to a stimulant forever | The stimulant wasn't consumed (`ConsumeStimulant`). It is re-announced until it expires. |
+| Two handles of the same character aren't equal | Handles are copied as they cross the API. Compare `handle:GetModel()`, never the handles. |
+| `context.Handle` is nil | The context came straight from the API (`GetAllTargets()` and the like). Use `base.CharacterAPI:GetHandle(context.Character)`. |
 | A task named in `StartTasks` doesn't start | The name wasn't registered by `base:RegisterTask` during `init`, or its constructor needs arguments. Start tasks are built with none. Look for `Auto start fail:`. |
 
 ---
@@ -469,3 +515,4 @@ All in [Example Scripts](Example%20Scripts/). Each is a complete mod script.
 | [06_TauntTask](Example%20Scripts/06_TauntTask.luau) | A custom task, a mod-owned state, starting a task from an event |
 | [07_IntimidateTask](Example%20Scripts/07_IntimidateTask.luau) | A task that sends a stimulant, and the receiving side |
 | [08_TestHarness](Example%20Scripts/08_TestHarness.luau) | A test that runs inside the live character and reports through attributes |
+| [09_HandleReads](Example%20Scripts/09_HandleReads.luau) | Reading a target through `context.Handle`, an ask, and leaving the target list with `HoldUntargetable` |

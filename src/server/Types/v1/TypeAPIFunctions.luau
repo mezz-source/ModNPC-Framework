@@ -2,6 +2,7 @@ local TypeAPI = {}
 
 export type Module =
 	"CharacterUtility"
+	| "CharacterHandles"
 	| "Configuration"
 	| "Damage"
 	| "Targetting"
@@ -19,6 +20,7 @@ export type Module =
 
 TypeAPI.Modules = table.freeze({
 	CharacterUtility = "CharacterUtility",
+	CharacterHandles = "CharacterHandles",
 	Configuration = "Configuration",
 	Damage = "Damage",
 	Targetting = "Targetting",
@@ -48,7 +50,12 @@ TypeAPI.Functions = table.freeze({
 		IsValidCharacter = "isValidCharacter",
 		IsValidModNPC = "isValidModNPC",
 		GetCharacterInfo = "getCharacterInfo",
-		GetTeam = "getTeam",
+	},
+	CharacterHandles = {
+		GetHandle = "getHandle",
+		GetHandles = "getHandles",
+		HoldUntargetable = "holdUntargetable",
+		ReleaseUntargetable = "releaseUntargetable",
 	},
 	Damage = {
 		TakeDamage = "takeDamage",
