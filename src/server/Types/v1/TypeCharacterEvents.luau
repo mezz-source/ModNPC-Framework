@@ -124,12 +124,43 @@ export type LaunchEnded = {
 	Recovered: boolean,
 }
 
+-- This character's own team setting (Config/Team/TeamName) changed
+export type TeamChanged = {
+	-- The team it was on, nil if it had none set
+	Previous: string?,
+	Current: string,
+}
+
 -- The Wander task picked a spot and is walking to it
 export type NewWanderPosition = {
 	Position: Vector3,
 }
 
+-- An Investigate task started sprinting to a spot
+export type InvestigationStarted = {
+	Position: Vector3,
+}
+
+-- An Investigate task ended, however it ended
+export type InvestigationEnded = {
+	Position: Vector3,
+	-- Whether it ended because a focus target was acquired (what investigating is for)
+	FoundTarget: boolean,
+	-- The focus target acquired, when FoundTarget
+	Target: Model?,
+	-- Why it ended: "Focus target acquired", "Arrived", "Timed out", or whatever stopped it ("Chase ended", a Movement
+	-- task taking over...)
+	Reason: string,
+}
+
 TypeCharacterEvents.Names = table.freeze({
+	Dialogue = {
+		Event = "DialogueEvent",
+		SfxEvent = "DialogueSoundEffect",
+		DialogueSoundEvent = "DialogueSoundEvent",
+		PlayAnimationEvent = "DialoguePlayAnimation",
+		StopAnimationEvent = "DialogueStopAnimation",
+	},
 	Weapon = {
 		-- Payload: WeaponChanged. Dispatched by CharacterAPI once the weapon is welded and flagged
 		Equipped = "WeaponEquipped",
@@ -211,13 +242,25 @@ TypeCharacterEvents.Names = table.freeze({
 		Launched = "CombatLaunched",
 		-- Payload: LaunchEnded. Dispatched by Damage as the character gives the launched state back
 		LaunchEnded = "CombatLaunchEnded",
+		-- Payload: Reason. Dispatched when an attack interrupts our current action (like attack).
+		DamageInterrupt = "DamageInterrupt",
 	},
 	Wander = {
 		-- Payload: NewWanderPosition. Dispatched by the Wander task once a walk to a new spot has started
 		NewPosition = "NewWanderPosition",
 	},
+	Investigate = {
+		-- Payload: InvestigationStarted. Dispatched by the Investigate task once it has taken movement over and set off
+		Started = "InvestigationStarted",
+		-- Payload: InvestigationEnded. Dispatched by the Investigate task as it ends, after its InvestigateState is back
+		-- to None
+		Ended = "InvestigationEnded",
+	},
 	Targetting = {
 		FocusedTargetChanged = "FocusedTargetChanged",
+		-- Payload: TargettingContext, then alreadyClaimed: boolean. Dispatched by the search task when we go from no focus to a
+		-- target. alreadyClaimed is true only if a teammate claimed the target before us (ClaimTarget); false otherwise,
+		-- including when nobody tried (no team, no teammates around, or the request failed).
 		NewFocusTarget = "NewFocusTarget",
 		LostFocusTarget = "LostFocusTarget",
 		TargetLost = "TargetLost",
@@ -235,6 +278,12 @@ TypeCharacterEvents.Names = table.freeze({
 		FriendAdded = "FriendAdded",
 		-- Payload: FriendContext. Dispatched by Friends when a friend left the target registry or stopped sharing our team
 		FriendLost = "FriendLost",
+		-- Payload: TeamChanged. Dispatched by Friends when this character's own team setting changes. Its friends and
+		-- teammates are dropped on the next search, so FriendLost / TeammateLost follow.
+		TeamChanged = "TeamChanged",
+		-- Payload: FriendBetrayal. Dispatched by Friends, right after that friend's FriendLost, when a friend is on another
+		-- team than the one we shared while we are still on it (the friend turned on us, living or not).
+		FriendBetrayed = "FriendBetrayed",
 	}
 })
 

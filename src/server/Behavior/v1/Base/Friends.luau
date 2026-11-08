@@ -1,6 +1,7 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
+local TypeDistance = require(ServerScriptService.ModNPCServer.Types.v1.TypeDistance)
 local TypeFriends = require(ServerScriptService.ModNPCServer.Types.v1.TypeFriends)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
 
@@ -8,6 +9,8 @@ local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local TargettingEvents = TypeCharacterEvents.Names.Targetting
 local HumanoidEvents = TypeCharacterEvents.Names.Humanoid
 local Outcomes = TypeFriends.Outcomes
+
+local TEAM_NAME_PATH = { "Team", "TeamName" }
 
 local Friends = {}
 Friends.__index = Friends
@@ -22,8 +25,8 @@ Friends.__index = Friends
 -- other answers (ReceiveFriendRequest). A friend out of range is remembered, just not usable (GetNearbyFriends). It is only
 -- forgotten once it leaves the target registry or stops sharing our team.
 --
--- Reached through Functions (GetTeammates, IsTeammate, GetTeammateDistance, GetFriends, GetNearbyFriends, IsFriend,
--- RequestFriend, ReceiveFriendRequest).
+-- Reached through Functions (GetTeammates, IsTeammate, GetTeammateDistance, GetTeammateDistances, GetClosestTeammate,
+-- GetClosestFriend, GetFriends, GetNearbyFriends, IsFriend, RequestFriend, ReceiveFriendRequest).
 function Friends.new(Base: any, _: Model)
 	local self = setmetatable({}, Friends)
 	self.CharacterAPI = Base.CharacterAPI
@@ -43,30 +46,33 @@ function Friends.new(Base: any, _: Model)
 			table.clear(self.Members)
 			table.clear(self.Friends)
 		end),
+		-- Our own team being changed (by a mod, a setting request, Studio): the search only notices on its next pass, this
+		-- announces it at once so a betrayal can be reacted to
+		Base.Configuration:Observe(TEAM_NAME_PATH, function(current, previous)
+			if current ~= previous and type(current) == "string" then
+				self.Events:Dispatch(TargettingEvents.TeamChanged, {
+					Previous = if type(previous) == "string" then previous else nil,
+					Current = current,
+				} :: TypeCharacterEvents.TeamChanged)
+			end
+		end),
 	}
 
 	return self
 end
 
--- Everyone we are allied to, at any distance, each with its handle
+-- Everyone we are allied to, at any distance, each with its handle. They come from the snapshot of everyone that the search
+-- reads too (it ran moments ago), so this costs no request of its own.
 function Friends:_getSameTeam(): { TypeTargetting.TargettingContext }
 	local us = self.CharacterAPI:GetHandle()
 	if not us then
 		return {}
 	end
 
-	local contexts = self.CharacterAPI:GetAllTargets()
-	local characters = {}
-	for _, context in contexts do
-		table.insert(characters, context.Character)
-	end
-	local handles = self.CharacterAPI:GetHandles(characters)
-
 	local allies = {}
-	for _, context in contexts do
-		local handle = handles[context.Character]
-		if handle and us:IsAlly(handle) then
-			context.Handle = handle
+	for _, context in self.CharacterAPI:GetTargetSnapshot().Targets do
+		local handle = context.Handle
+		if handle and handle:IsAlive() and us:IsAlly(handle) then
 			table.insert(allies, context)
 		end
 	end
@@ -79,13 +85,7 @@ function Friends:_withinProvokeRange(contexts: { TypeTargetting.TargettingContex
 		return contexts
 	end
 
-	local inRange = {}
-	for _, context in contexts do
-		if self.Distance:IsWithin(context.Character, provokeRange) then
-			table.insert(inRange, context)
-		end
-	end
-	return inRange
+	return self.Distance:FilterWithin(contexts, provokeRange)
 end
 
 function Friends:_forgetInvalidFriends(sameTeam: { TypeTargetting.TargettingContext })
@@ -94,12 +94,37 @@ function Friends:_forgetInvalidFriends(sameTeam: { TypeTargetting.TargettingCont
 		valid[context.Character] = true
 	end
 
+	local ourTeam = self.CharacterAPI:GetTeam()
 	for character, friend in self.Friends do
 		if not valid[character] then
 			self.Friends[character] = nil
 			self.Events:Dispatch(TargettingEvents.FriendLost, friend)
+			self:_checkBetrayal(friend, ourTeam)
 		end
 	end
+end
+
+-- A friend was dropped: was it because it left our team? A team belongs to a character whether or not it is alive, and the
+-- handle answers with the last team of one that is gone, so this reads the friend's team live instead of racing the
+-- stimulants or the other character's own bookkeeping. Nothing is announced when it was us who changed team (TeamChanged is
+-- ours), or when the friend just died or left the world on the team it had.
+function Friends:_checkBetrayal(friend: TypeFriends.FriendContext, ourTeam: string?)
+	local handle = friend.Handle
+	if not handle or ourTeam ~= friend.Team then
+		return
+	end
+
+	local newTeam = handle:GetTeam()
+	if newTeam == friend.Team then
+		return
+	end
+
+	self.Events:Dispatch(TargettingEvents.FriendBetrayed, {
+		Character = friend.Character,
+		Team = friend.Team,
+		NewTeam = newTeam,
+		Handle = handle,
+	} :: TypeFriends.FriendBetrayal)
 end
 
 -- Sync what we know with the API's, firing spotted/lost for the differences. A new teammate we haven't connected with
@@ -169,6 +194,21 @@ function Friends:GetTeammateDistance(character: Model): number?
 		return nil
 	end
 	return self.Distance:GetDistanceTo(character)
+end
+
+-- Every teammate's distance from us, keyed by character. One measurement for all of them, not one per teammate.
+function Friends:GetTeammateDistances(): TypeDistance.Distances
+	return self.Distance:Measure(self:GetTeammates())
+end
+
+-- The nearest teammate and its distance in studs, nil if we have none
+function Friends:GetClosestTeammate(): (TypeTargetting.TargettingContext?, number?)
+	return self.Distance:Nearest(self:GetTeammates())
+end
+
+-- The nearest of the friends we can reach (see GetNearbyFriends) and its distance in studs, nil if there is none
+function Friends:GetClosestFriend(): (TypeFriends.FriendContext?, number?)
+	return self.Distance:Nearest(self:GetNearbyFriends())
 end
 
 function Friends:GetFriends(): { TypeFriends.FriendContext }

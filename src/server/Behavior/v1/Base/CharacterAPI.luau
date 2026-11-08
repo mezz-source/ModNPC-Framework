@@ -30,6 +30,15 @@ local MovementFunctions = Functions.Movement
 local WeaponEvents = TypeCharacterEvents.Names.Weapon
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 
+-- How long the world's target list is reused before it is asked for again. The list only changes when a character turns up
+-- or goes away, and each ask copies every target across the API, so one ask serves every character that searches in the
+-- window. What a target is doing (position, health, team, whether it is targetable) is read live through its handle, so the
+-- only thing that can be this old is who exists. Whoever acts on a character from the list should check its handle is alive.
+local TARGET_SNAPSHOT_LIFETIME = 0.25
+
+-- Shared by every CharacterAPI: the list is the same whoever asks, and so are the handles on it
+local targetSnapshot: TypeTargetting.TargetSnapshot? = nil
+
 local function response(success: boolean, message: string?, data: any?): TypeRequests.CharacterResponse
 	return {
 		Success = success,
@@ -323,6 +332,14 @@ function CharacterAPI:RequestBanterResponse(target: Model): boolean
 	return response ~= nil and response.Success and response.Data == true
 end
 
+-- Asks a new friend to answer this one's greeting (its FriendRespond function). Returns whether it is answering; a target that
+-- isn't a started ModNPC, or that declines (cooldown, something more important to say), is just a false.
+function CharacterAPI:RequestFriendResponse(target: Model): boolean
+	local response =
+		self:RequestAPI(Modules.Dialogue, Functions.Dialogue.RequestFriendResponse, { self.Character, target })
+	return response ~= nil and response.Success and response.Data == true
+end
+
 -- Highlights
 
 -- Makes a highlight on this character. The highlight drives its own instance (colors, transparencies, tweens, flashes;
@@ -539,6 +556,40 @@ function CharacterAPI:GetAllTargets(): { TypeTargetting.TargettingContext }
 	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetTargets, nil) or {}
 end
 
+-- Every target, each with its handle, taken no longer than maxAge seconds ago (the default lifetime if not given, 0 for a
+-- fresh one). Costs a request only when the shared one is too old, so prefer this to GetAllTargets for anything that runs on
+-- a timer. The snapshot and its contexts are frozen because every character reads the same ones.
+function CharacterAPI:GetTargetSnapshot(maxAge: number?): TypeTargetting.TargetSnapshot
+	local now = os.clock()
+	local current = targetSnapshot
+	if current and now - current.Taken <= (maxAge or TARGET_SNAPSHOT_LIFETIME) then
+		return current
+	end
+
+	local contexts = self:GetAllTargets()
+	local characters = {}
+	for _, context in contexts do
+		table.insert(characters, context.Character)
+	end
+
+	local handles = self:GetHandles(characters)
+	local targets = {}
+	for _, context in contexts do
+		local handle = handles[context.Character]
+		if handle then
+			context.Handle = handle
+			table.insert(targets, table.freeze(context))
+		end
+	end
+
+	local snapshot: TypeTargetting.TargetSnapshot = table.freeze({
+		Taken = now,
+		Targets = table.freeze(targets),
+	})
+	targetSnapshot = snapshot
+	return snapshot
+end
+
 function CharacterAPI:GetTargetsOfType(characterType: string): { TypeTargetting.TargettingContext }
 	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetTargetsOfType, { characterType }) or {}
 end
@@ -681,6 +732,27 @@ end
 function CharacterAPI:RequestFriend(target: Model): TypeFriends.FriendOutcome
 	return self:RequestAPIData(Modules.Friends, Functions.Friends.RequestFriend, { self.Character, target })
 		or TypeFriends.Outcomes.Failed
+end
+
+-- Target claims: one per team, short lived, the first of a team to claim a target holds it (see Targetting.claimTarget)
+
+-- Claims the target for our team, for duration seconds (the API's default when nil, capped there). Whether we took it and,
+-- either way, who holds it now; nil if the request failed.
+function CharacterAPI:ClaimTarget(target: Model, duration: number?): TypeTargetting.TargetClaimAttempt?
+	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.ClaimTarget, { self.Character, target, duration })
+end
+
+-- Who on our team holds the target (can be us), nil if nobody does or the request failed
+function CharacterAPI:GetTargetClaimHolder(target: Model): Model?
+	local claim: TypeTargetting.TargetClaim? =
+		self:RequestAPIData(Modules.Targetting, Functions.Targetting.GetTargetClaim, { self.Character, target })
+	return if claim then claim.Holder else nil
+end
+
+-- Ends our claim on the target early. Whether we held one.
+function CharacterAPI:ReleaseTargetClaim(target: Model): boolean
+	return self:RequestAPIData(Modules.Targetting, Functions.Targetting.ReleaseTargetClaim, { self.Character, target })
+		== true
 end
 
 -- Handles

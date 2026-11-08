@@ -8,9 +8,10 @@
 - [x] `DialogueBark` essential start task (listens for events, barks through `SayLine`)
 - [x] Basic barks: CombatDealCrit, CombatLaunched, CombatRecieveCrit (+ block breaks), CombatRecover, CombatDodged, Death, Idle, SpotEnemyIndividual
 - [x] `Config/Dialogue/MaxRandomDelay` per-category random delay before a line is said
-- [ ] Barks that need broadcasts/coordination: SpotEnemyTeamed, SpotFriendStart/Response, FriendlyDead, (Friendly)TeamChanged
+- [x] SpotFriendStart/Response: friend greeting exchange (`FriendAdded` Initiated -> `StartFriendGreeting` -> `RequestFriendResponse` -> `FriendRespond`), same route as banter
+- [x] Barks that need broadcasts/coordination: (Friendly)TeamChanged (SpotEnemyTeamed / SpotEnemyTeamedResponse are done, see Friend system)
 - [x] Dialogue API / class (per-character dialogue frame: queue, cancel, destroy; `CharacterAPI:CreateDialogueFrame`, `base.Dialogue:Queue/Cancel/CancelAll`)
-- [ ] Wire the frame's `OnEvent` (`<sfx>`, `<anim>`, `<event>`)
+- [X] Wire the frame's `OnEvent` (`<sfx>`, `<anim>`, `<event>`)
 - [x] Relevant text effects
 
 #### 1b. Conversation system
@@ -45,15 +46,18 @@ We have targeting params for it, but there's no framework for bullets or magical
 ### 6. Friend system
 We have a targetting system, we just need to build some broadcasts and a base behavior module
 
-- [ ] Build the API support for tracking when an NPC changes teams and emit a broadcast stimulant
-- [ ] Implement a broadcast stimulant for an NPC dying in general
-- [ ] Build a base friend module with various utilities (like getting nearest friends) (`Friends` exists with `GetTeammates`/`IsTeammate`/`GetTeammateDistance`; utilities still to come)
+- [x] Build a base friend module with various utilities (like getting nearest friends) (`Friends` has `GetTeammates`/`IsTeammate`/`GetTeammateDistance`/`GetTeammateDistances`/`GetClosestTeammate`/`GetClosestFriend`, all on the bulk `Distance` measures)
+- [x] Bulk distance measures and shared target ticks: `Distance:Measure`/`FilterWithin`/`Nearest`/`Furthest` read our position once and reuse a reading for 0.05s; `CharacterAPI:GetTargetSnapshot` is one frozen target list shared by every character for 0.25s, used by the search and Friends (live test: 21 `getTargets` requests over 59 searches, 2 per search before)
+- [x] Maybe: cache "no handle" answers in `CharacterAPI:GetHandle` (an untracked character is asked about on every call), and decide whether to remove the API-side `Targetting.getDistance*` fallbacks
 - [x] Spot targets with matching teams and add them to a friends list (`Friends`, synced after each search, limited to the provoke range)
 - [x] Friend connection handshake: API `Friends` module locks the pair and carries the request, Base `Friends` asks and answers (`RequestFriend`/`ReceiveFriendRequest`), once per pair; friends are remembered out of range
-- [ ] Listen for events indicating they change teams (the search and `Friends` already pick a team change up on their next pass; this is for reacting to it the moment it happens)
-- [ ] Listen for events where a friendly dies
+- [x] Listen for events indicating they change teams (the search and `Friends` already pick a team change up on their next pass; this is for reacting to it the moment it happens)
+- [x] Listen for events where a friendly dies
 - [ ] Add a wander preference for patrolling around a friend instead of randomly
-- [ ] Target spotting can play a different line depending on if a friend spotted them first or not (Individual/Teamed switch)
+- [x] Target spotting can play a different line depending on if a friend spotted them first or not (Individual/Teamed switch)
+  - [x] API side: `Util/Claims` (`newPair`/`newSingle`, optional timeouts) and Targetting target claims, one per team (`claimTarget` returns `{ Claimed, Holder }`, `getTargetClaim`, `releaseTargetClaim`; 5s default, 30s cap), live-tested through the request bindable
+  - [x] Base side: CharacterAPI `ClaimTarget`/`GetTargetClaimHolder`/`ReleaseTargetClaim`. `FunctionEnum.ClaimTarget` (TargetSelector) is gated on having a team and a teammate and runs before `NewFocusTarget`, which carries `alreadyClaimed`. The bark task skips the line when the target is already claimed, otherwise it calls `CallOutTarget` (SpotEnemyTeamed on a team with a teammate in range, SpotEnemyIndividual otherwise, then waits for the line to finish typing). Live-tested.
+  - [x] Callout stimulant `EnemySpottedByAlly` (Spotter, Target) sent to teammates in range once the line is typed. The bark answers with `SpotEnemyTeamedResponse` once the target is its own focus. Live-tested, including a teammate who focused the target after the callout arrived.
 
 ---
 
@@ -77,6 +81,17 @@ We have a targetting system, we just need to build some broadcasts and a base be
 ### 4. Bounce particles
 
 - [x] Particles for attack bouncing (see [Attack bouncing](#2-attack-bouncing))
+
+### 5. Performance
+This should be the last swipe as base systems become finalized
+
+- [ ] Profile high usage and expensive functions
+- [ ] Integrate fixes
+- [ ] Test large sums of NPCs and performance
+
+### 6. Tool Holding
+- [x] Add an additional 'WeaponHold' animation runs at all times so that hold animations are consistent across rigs (Motor6D displcements)
+
 
 ---
 
@@ -117,4 +132,4 @@ We have a targetting system, we just need to build some broadcasts and a base be
 - [ ] Build a lightweight skeleton behavior set with bare `BaseBehavior` essentials (animation, damage, events and functions, mods)
 - [ ] Build Jeff/Mainscript behavior set
 - [ ] Build Standard v1 behavior set
-- [ ] Build Standard v1 behavior set
+- [ ] Build Standard v2 behavior set

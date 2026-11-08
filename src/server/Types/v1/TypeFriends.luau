@@ -19,6 +19,16 @@ export type FriendContext = {
 	Handle: TypeCharacterHandle.CharacterHandle?,
 }
 
+-- A friend that left our team while we stayed on it
+export type FriendBetrayal = {
+	Character: Model,
+	-- The team we shared, and still have
+	Team: string,
+	-- The team the friend is on now
+	NewTeam: string,
+	Handle: TypeCharacterHandle.CharacterHandle?,
+}
+
 export type FriendOutcome = "Accepted" | "TeamMismatch" | "SenderDead" | "ReceiverDead" | "Busy" | "Failed"
 
 TypeFriends.Outcomes = table.freeze({

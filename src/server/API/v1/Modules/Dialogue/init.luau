@@ -23,6 +23,8 @@ type FrameOptions = TypeDialogueFrame.FrameOptions
 local GUI_NAME = TypeDialogueFrame.GuiName
 -- The target's function that answers banter (TypeCharacterFunctions.FunctionEnum.BanterRespond)
 local BANTER_RESPOND_FUNCTION = "BanterRespond"
+-- The target's function that answers a friend's greeting (TypeCharacterFunctions.FunctionEnum.FriendRespond)
+local FRIEND_RESPOND_FUNCTION = "FriendRespond"
 
 -- Frames by character. Weak so a character that is gone takes its frame with it.
 local framesByCharacter: { [Model]: Frame } = setmetatable({}, { __mode = "k" }) :: any
@@ -172,11 +174,10 @@ function Dialogue.removeFrame(character: Model): TypeModuleResponse.ModuleRespon
 	return response(true, TypeRequests.Enums.StatusCode.Success, "Dialogue frame removed")
 end
 
--- Asks the target to answer the starter's banter: calls the target's BanterRespond function (Dialogue:BanterRespond) through
--- its bind, with the starter. Data is whether it answers. A target that can't (not a started ModNPC, gone) or won't
--- (cooling down, busy with something more important) is a successful request with Data = false, never an error: banter is
--- optional by nature. Only a malformed request fails.
-function Dialogue.requestBanterResponse(starter: Model, target: Model): TypeModuleResponse.ModuleResponse
+-- Calls the target's answering function with the starter. Data is whether it answers. A target that can't (not a started
+-- ModNPC, gone) or won't (cooling down, busy with something more important) is a successful request with Data = false, never
+-- an error: an answer is optional by nature. Only a malformed request fails.
+local function requestResponse(starter: Model, target: Model, functionName: string): TypeModuleResponse.ModuleResponse
 	if typeof(starter) ~= "Instance" or not starter:IsA("Model") then
 		return response(false, TypeRequests.Enums.StatusCode.MalformedRequest, "Starter must be a Model")
 	end
@@ -189,7 +190,7 @@ function Dialogue.requestBanterResponse(starter: Model, target: Model): TypeModu
 	end
 
 	-- sendFunction itself refuses a character with no bind (not a ModNPC) or one that was never started
-	local answer = CharacterUtility.sendFunction(target, BANTER_RESPOND_FUNCTION, { starter })
+	local answer = CharacterUtility.sendFunction(target, functionName, { starter })
 	local answered = answer.Success and answer.Data == true
 	return response(
 		true,
@@ -197,6 +198,17 @@ function Dialogue.requestBanterResponse(starter: Model, target: Model): TypeModu
 		if answered then "Target answered" else "Target did not answer",
 		answered
 	)
+end
+
+-- Asks the target to answer the starter's banter: calls the target's BanterRespond function (Dialogue:BanterRespond)
+function Dialogue.requestBanterResponse(starter: Model, target: Model): TypeModuleResponse.ModuleResponse
+	return requestResponse(starter, target, BANTER_RESPOND_FUNCTION)
+end
+
+-- Asks the target to answer the starter's greeting after they became friends: calls its FriendRespond function
+-- (Dialogue:FriendRespond)
+function Dialogue.requestFriendResponse(starter: Model, target: Model): TypeModuleResponse.ModuleResponse
+	return requestResponse(starter, target, FRIEND_RESPOND_FUNCTION)
 end
 
 function Dialogue.init(_api: any) end

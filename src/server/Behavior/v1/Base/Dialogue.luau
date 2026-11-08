@@ -1,8 +1,12 @@
 local ServerScriptService = game:GetService("ServerScriptService")
+local TypeDialogue = require(ServerScriptService.ModNPCServer.API.v1.Modules.Dialogue.TypeDialogue)
 local TypeAPIFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeAPIFunctions)
 local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
+local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeDialogueFrame = require(ServerScriptService.ModNPCServer.Types.v1.TypeDialogueFrame)
+local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStimulant)
+local TypeTeams = require(ServerScriptService.ModNPCServer.Types.v1.TypeTeams)
 
 local Dialogue = {}
 Dialogue.__index = Dialogue
@@ -11,6 +15,9 @@ type Priority = TypeDialogueFrame.Priority
 type SayData = TypeDialogueFrame.SayData
 type LineOptions = TypeDialogueFrame.LineOptions
 type LineData = TypeCDN.LineData
+
+local DialogueEventEnums = TypeDialogue.Events
+local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 
 -- Lines played together under one priority: one line for a category, several for a conversation. It is running while the
 -- frame's current line is one of its own.
@@ -24,6 +31,7 @@ local Modules = TypeAPIFunctions.Modules
 local Functions = TypeAPIFunctions.Functions.ContentDelivery
 local Priorities = TypeDialogueFrame.Priorities
 local PriorityRanks = TypeDialogueFrame.PriorityRanks
+
 local CONVERSATIONS = TypeDialogueFrame.ConversationsCategory
 
 local TALK_SPEED_PATH = { TypeDialogueFrame.ConfigFolder, TypeDialogueFrame.TalkSpeedSetting }
@@ -32,6 +40,13 @@ local CHATTINESS_PATH = { TypeDialogueFrame.ConfigFolder, TypeDialogueFrame.Chat
 local PLACEHOLDER = "%%s"
 local BANTER_START = "CombatBanterStart"
 local BANTER_RESPOND = "CombatBanterRespond"
+local FRIEND_START = "SpotFriendStart"
+local FRIEND_RESPOND = "SpotFriendResponse"
+local SPOT_ENEMY_INDIVIDUAL = "SpotEnemyIndividual"
+local SPOT_ENEMY_TEAMED = "SpotEnemyTeamed"
+local NEUTRAL_TEAM = TypeTeams.CoreTeams.Neutral
+-- How long teammates have to answer a callout
+local CALLOUT_LASTING = 3
 
 local function isTalkSpeed(value: any): boolean
 	return typeof(value) == "number" and value > 0 and value < math.huge
@@ -90,11 +105,16 @@ function Dialogue.new(Base: any, character: Model)
 
 	local textColor = self.Configuration:Get(TEXT_COLOR_PATH)
 
-	self.Frame = self.CharacterAPI:CreateDialogueFrame({
+	local options = {
 		Color = if typeof(textColor) == "Color3" then textColor else nil,
 		TalkSound = talkSound,
 		TalkSpeed = if isTalkSpeed(talkSpeed) then talkSpeed else nil,
-	})
+		OnEvent = function(event) 
+			self.Base.Functions:CallFunction(FunctionEnum.OnDialogueEvent, event)
+		end
+	}
+
+	self.Frame = self.CharacterAPI:CreateDialogueFrame(options)
 
 	self:_checkPriorities()
 
@@ -127,6 +147,27 @@ function Dialogue.new(Base: any, character: Model)
 
 	-- print("Dialogue data loaded for character:", character.Name, "Data:", self.Data)
 	return self
+end
+
+function Dialogue:OnEvent(event: TypeDialogue.Event)
+	if event.Kind == DialogueEventEnums.Sfx then
+		self.Base.Functions:CallFunction(FunctionEnum.PlaySound, event.Arg)
+	elseif event.Kind == DialogueEventEnums.PlayAnimation then
+		self.Base.Functions:CallFunction(FunctionEnum.PlayAnimation, event.Arg)
+	elseif event.Kind == DialogueEventEnums.StopAnimation then
+		self.Base.Functions:CallFunction(FunctionEnum.StopAnimation, event.Arg)
+	end
+
+	-- NOTE: event not included above as it'll automatically be dispatched below
+
+	local eventName = TypeDialogue.EventDispatchNames[event.Kind]
+	if not eventName then 
+		warn("Kind", event.Kind, "dialogue event is not a known kind, cannot dispatch base event")
+		return
+	end
+
+	-- emit to listeners
+	self.Base.Events:Dispatch(eventName, event.Kind, event.Arg)
 end
 
 -- Points out categories and priorities that don't match up (most likely a typo in one of the two names)
@@ -455,17 +496,105 @@ end
 -- not answer (not a ModNPC, cooling down, busy with something more important), which is fine. Returns whether our line is
 -- playing (or lined up). Reached through Functions (StartBanter).
 function Dialogue:StartBanter(target: Model?): boolean
+	return self:_startExchange(BANTER_START, { RollChattiness = true }, target, function(api, other)
+		api:RequestBanterResponse(other)
+	end)
+end
+
+-- Says a line of the start category, and once it has been typed out lets request ask the target to answer. The shape of
+-- every "say X, then let someone answer" exchange. Returns whether our line is playing (or lined up).
+function Dialogue:_startExchange(
+	startCategory: string,
+	data: SayData?,
+	target: Model?,
+	request: (api: any, target: Model) -> ()
+): boolean
 	if typeof(target) ~= "Instance" or not target:IsA("Model") or target == self.Character then
 		return false
 	end
 
-	return self:_sayCategory(BANTER_START, { RollChattiness = true }, function(sequence)
+	return self:_sayCategory(startCategory, data, function(sequence)
 		self:_whenTyped(sequence, function(typed)
 			if typed and self.CharacterAPI and target.Parent then
-				self.CharacterAPI:RequestBanterResponse(target)
+				request(self.CharacterAPI, target)
 			end
 		end)
 	end)
+end
+
+-- We just made a friend (we asked, they accepted; Friends dispatches FriendAdded with Initiated): greets them with a
+-- SpotFriendStart line (their name fills a %s), and once it has been typed out asks them to answer with a SpotFriendResponse
+-- of their own. No chattiness roll: meeting a new friend is worth a word. The friend may well not answer (not a ModNPC,
+-- cooling down, busy with something more important), which is fine. Returns whether our line is playing (or lined up).
+-- Reached through Functions (StartFriendGreeting).
+function Dialogue:StartFriendGreeting(friend: Model?): boolean
+	local names = if typeof(friend) == "Instance" then { friend.Name } else nil
+	return self:_startExchange(FRIEND_START, { Names = names }, friend, function(api, other)
+		api:RequestFriendResponse(other)
+	end)
+end
+
+-- A new friend greeted us (StartFriendGreeting, through the API): answer with a SpotFriendResponse line, under the usual
+-- rules, so a reply on cooldown or under something more important just doesn't happen. starter fills a %s.
+-- Reached through Functions (FriendRespond), which is what the API calls on us.
+function Dialogue:FriendRespond(starter: Model?): boolean
+	local names = if typeof(starter) == "Instance" then { starter.Name } else nil
+	return self:SayLine(FRIEND_RESPOND, { Names = names })
+end
+
+-- We are the first of our team to spot the target, or on our own: a line under the usual rules. SpotEnemyTeamed when we
+-- are on a team with a teammate in range to hear it; SpotEnemyIndividual otherwise (no team, or nobody around). After a
+-- teamed line has been typed out, an EnemySpottedByAlly stimulant tells those teammates, so one who sees it too can
+-- answer. Returns whether our line is playing (or lined up). Reached through Functions (CallOutTarget).
+function Dialogue:CallOutTarget(target: Model?): boolean
+	if typeof(target) ~= "Instance" or not target:IsA("Model") or target == self.Character then
+		return false
+	end
+
+	local team = self.CharacterAPI:GetTeam()
+	local teamed = team ~= nil and team ~= NEUTRAL_TEAM and #self:_getTeammateCharacters() > 0
+	if not teamed then
+		return self:_sayCategory(SPOT_ENEMY_INDIVIDUAL, nil, nil)
+	end
+
+	return self:_sayCategory(SPOT_ENEMY_TEAMED, nil, function(sequence)
+		self:_whenTyped(sequence, function(typed)
+			if typed and target.Parent then
+				self:_tellTeammates(target)
+			end
+		end)
+	end)
+end
+
+-- Our teammates in range (Friends, through Functions), as characters
+function Dialogue:_getTeammateCharacters(): { Model }
+	local teammates = self.Base.Functions:CallFunction(FunctionEnum.GetTeammates)
+	local characters = {}
+	if type(teammates) == "table" then
+		for _, context in teammates do
+			table.insert(characters, context.Character)
+		end
+	end
+	return characters
+end
+
+-- Sends EnemySpottedByAlly about the target to our teammates in range, if any are still around once our line is typed
+function Dialogue:_tellTeammates(target: Model)
+	local recipients = self:_getTeammateCharacters()
+	if #recipients == 0 then
+		return
+	end
+
+	local data: TypeStimulant.EnemySpottedByAllyData = {
+		Spotter = self.Character,
+		Target = target,
+	}
+	self.Base
+		:NewStimulant(TypeStimulant.Names.EnemySpottedByAlly)
+		:ToGroup(recipients)
+		:Lasting(CALLOUT_LASTING)
+		:WithData(data)
+		:Send()
 end
 
 -- Another character started banter with us (StartBanter, through the API): answer with a CombatBanterRespond line, under

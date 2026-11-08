@@ -103,7 +103,18 @@ TypeStimulant.Names = table.freeze({
 	-- The sender just died. Broadcast to every receiver, Normal, a few seconds, and it outlives its sender (Lingers).
 	-- Positioned where the sender fell. Data: DiedData.
 	Died = "Died",
+	-- The sender was the first of its team to spot a target (it holds the team's claim on it) and has just called it out.
+	-- Sent to its teammates in range once its SpotEnemyTeamed line is typed out, so one who sees the same target can
+	-- answer. Data: EnemySpottedByAllyData. Normal, a few seconds.
+	EnemySpottedByAlly = "EnemySpottedByAlly",
 })
+
+export type EnemySpottedByAllyData = {
+	-- The first responder, who called the target out
+	Spotter: Model,
+	-- Who it called out
+	Target: Model,
+}
 
 -- The killing hit, when it came through the damage register (Damage:ReceiveRegistered), so it is known in full
 export type DiedDamage = {

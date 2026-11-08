@@ -190,7 +190,7 @@ Function callbacks are **not** wrapped in `pcall`. An error in your hook surface
 | Stamina | `GetStamina`, `GetStaminaCost`, `GetStaminaEfficiency`, `IsExhausted`, `CanAffordStamina`, `PurchaseStamina`, `SpendStamina`, `RestoreStamina`, `BreakStamina` |
 | Skills | `GetSkillLevel`, `GetSkillChance`, `RollSkill`, `RollSkills` |
 | Disposition | `GetDisposition`, `GetEngageDistance`, `GetHoldDistance`, `GetAttackStandoff`, `GetAttackFit`, `GetAttackPace` |
-| Friends | `GetTeammates`, `IsTeammate`, `GetTeammateDistance`, `GetFriends`, `GetNearbyFriends`, `IsFriend`, `RequestFriend`, `ReceiveFriendRequest` |
+| Friends | `GetTeammates`, `IsTeammate`, `GetTeammateDistance`, `GetTeammateDistances`, `GetClosestTeammate`, `GetClosestFriend`, `GetFriends`, `GetNearbyFriends`, `IsFriend`, `RequestFriend`, `ReceiveFriendRequest` |
 | Targeting | `GetTargets`, `IsValidTargetPreference`, `SelectBestTarget` |
 | Presentation | `PlaySound`, `PlaySoundCategory`, `PlayVFX`, `PlayVFXGroup`, `CreateParticle`, `LoadAnimation`, `PlayAnimation`, `StopAnimation` |
 | Weapons | `EquipWeapon`, `UnequipWeapon`, `ArmWeapon`, `DisarmWeapon` |
@@ -242,10 +242,12 @@ The names mods use most:
 | `Humanoid.HealthChanged` | `Health`, `MaxHealth` | Any health change |
 | `Stamina.Changed` | `Previous`, `Current`, `Max`, `Reason?` | Stamina or its maximum changed |
 | `Stamina.ExhaustionStarted` / `ExhaustionEnded` | `Current`, `Max`, `Efficiency` | Exhaustion began or ended |
-| `Targetting.TargetSpotted` / `NewFocusTarget` / `TargetLost` / `AllTargetsLost` | | Target discovery and loss |
+| `Targetting.TargetSpotted` / `NewFocusTarget` / `TargetLost` / `AllTargetsLost` | | Target discovery and loss. `NewFocusTarget` passes a second argument, `alreadyClaimed`: true if a teammate claimed the target first. It is false when this character has no team, has no teammates nearby, or the claim request failed. |
 | `Targetting.SearchCompleted` | none | A target search finished, after its target events |
 | `Targetting.TeammateSpotted` / `TeammateLost` | `Character`, `Type`, `Team` | A character on this one's team came within its `Provoke` range, or is gone (left the range, died, or either side changed teams). Updated after each search, so a character without the `SearchForTargets` task has no teammates. Neutral characters never have teammates. |
 | `Targetting.FriendAdded` / `FriendLost` | `Character`, `Team`, `Initiated` | A connection was made, on both sides (`Initiated` is true for the one who asked), or a friend left the target registry or the team. Friends stay friends out of range; `GetNearbyFriends` gives the ones in range. |
+| `Targetting.FriendBetrayed` | `Character`, `Team`, `NewTeam`, `Handle?` | A friend is on another team than the one we shared, while we are still on it (living or dead). Comes right after that friend's `FriendLost`, and the bark task says a `FriendlyTeamChanged` line. Not sent when we were the one who changed team. |
+| `Targetting.TeamChanged` | `Previous?`, `Current` | This character's own `Team/TeamName` setting changed. Dispatched at once; its friends and teammates are dropped on the next search (`FriendLost` / `TeammateLost`). The bark task says a `TeamChanged` line. |
 | `Weapon.Equipped` / `Unequipped` / `Armed` / `Disarmed` | `Weapon` | Weapon changes |
 | `Thought.ReactionUpdate` | seconds since the last tick | The character's reaction tick. See [Custom Tasks](Custom%20Tasks.md#deciding-and-acting). |
 | `Stimulant.Pending` | the queued stimulants, most urgent first | Each reaction tick while any are queued |
@@ -268,8 +270,8 @@ Mods never change instances through the Humanoid or the model. They ask the API,
 | Flash the character | `FlashHighlight({ FillColor, OutlineColor, Hold, FadeTime })` |
 | A lasting glow | `CreateHighlight(name, options)` returns a `Highlight` with `SetFillColor`, `TweenFillTransparency`, `StartFlash`, `Destroy`. Also `GetHighlight`, `RemoveHighlight`. |
 | An overhead bar | `CreateBar(name, options)` returns a `Bar` with `SetFill`, `StartFillFlash`, `Destroy`. Also `GetBar`, `RemoveBar`. |
-| Find targets | `GetOpposingTargets()`, `GetSameTeamTargets()`, `GetAllTargets()`, `GetTargetsOfType(type)` |
-| Distances | `GetDistanceTo(model)`, `GetDistanceToPosition(position)` |
+| Find targets | `GetOpposingTargets()`, `GetSameTeamTargets()`, `GetAllTargets()`, `GetTargetsOfType(type)`. Each is a request. For anything on a timer use `GetTargetSnapshot()`: everyone, each with its `Handle`, shared by every character and at most 0.25s old, so it usually costs nothing. It and its contexts are frozen. |
+| Distances | `GetDistanceTo(model)`, `GetDistanceToPosition(position)`. For many characters at once use `base.Distance`: `Measure(list)`, `FilterWithin(list, range)`, `Nearest(list)`, `Furthest(list)`. They take contexts (or `{ Character = model }`), read our position once, and reuse a reading made in the last 0.05s (pass a `maxAge` of 0 to measure fresh). `GetClosestTeammate()` and `GetClosestFriend()` return the context and its distance. |
 | Team, status | `GetTeam()`, `IsExhausted(model?)`, `IsStaggered(model?)` |
 | Read a character | `GetHandle(model?)` returns its read-only handle. See [Reading other characters](#reading-other-characters). |
 | Leave the target list | `HoldUntargetable(reason)`, then `ReleaseUntargetable(reason)`. See [Reading other characters](#reading-other-characters). |
@@ -391,7 +393,7 @@ base.Events:Subscribe(Events.Targetting.NewFocusTarget, function(context)
 end)
 ```
 
-For any other character, `base.CharacterAPI:GetHandle(model)` gets its handle, and `GetHandle()` gets this character's own. They are kept after the first time, so asking again costs nothing. Contexts straight from the API, such as `GetAllTargets()`, don't carry one.
+For any other character, `base.CharacterAPI:GetHandle(model)` gets its handle, and `GetHandle()` gets this character's own. They are kept after the first time, so asking again costs nothing. Contexts straight from the API, such as `GetAllTargets()`, don't carry one; the ones in `GetTargetSnapshot().Targets` do, and those are frozen, so copy a context before changing it.
 
 | Read | Methods | Notes |
 |---|---|---|

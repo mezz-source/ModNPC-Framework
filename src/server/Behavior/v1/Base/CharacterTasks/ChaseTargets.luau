@@ -14,6 +14,8 @@ local Axes = TypeDisposition.Axes
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local TargettingEvents = TypeCharacterEvents.Names.Targetting
 local StateEvents = TypeCharacterEvents.Names.State
+local StimulantEvents = TypeCharacterEvents.Names.Stimulant
+local StimulantNames = TypeStimulant.Names
 local MovementEnum = TypeMovement.MovementEnum
 local ENGAGE_STATE_KEY = TypeState.Keys.EngageState
 local EngageStateEnum = TypeState.EngageStateEnum
@@ -76,6 +78,12 @@ function ChaseTargetsTask.new(base, _: number?)
 	self.targettingRange = self.Configuration:GetThoughtSetting("TargettingRange") :: TypeTargetting.TargettingRange
 	-- The target we are chasing and keeping our eyes on, if any
 	self.FocusTarget = nil :: TypeTargetting.TargettingContext?
+	-- The Investigate task we started on a teammate's callout, while it runs (it clears itself from here when it ends)
+	self.investigation = nil :: TypeTask.Task?
+	-- EnemySpottedByAlly ids already acted on -> when they expire. Pending goes out every reaction tick while a stimulant
+	-- is queued, and we only read it (DialogueBark answers the callout later, so it must stay queued), so this keeps one
+	-- callout from restarting the investigation each tick.
+	self.handledCallouts = {} :: { [number]: number }
 	self.sprinting = false
 	-- Until when (os.clock) a lunge that was rolled lasts
 	self.lungeUntil = 0
@@ -272,6 +280,57 @@ function ChaseTargetsTask:Chase(target: TypeTargetting.TargettingContext)
 	self:SetDrive(MovementEnum.Forward)
 end
 
+-- A teammate called out a target (EnemySpottedByAlly). With nobody of our own to chase, we go and look where the target was
+-- when it was called out. The investigation ends itself when we spot someone (a new focus target), or times out.
+function ChaseTargetsTask:_onPendingStimulants(pending: { TypeStimulant.StimulantEvent })
+	local now = os.clock()
+	for id, expiresAt in self.handledCallouts do
+		if expiresAt <= now then
+			self.handledCallouts[id] = nil
+		end
+	end
+
+	for _, stimulant in pending do
+		if stimulant.Name ~= StimulantNames.EnemySpottedByAlly or self.handledCallouts[stimulant.Id] then
+			continue
+		end
+		self.handledCallouts[stimulant.Id] = stimulant.ExpiresAt
+
+		if self.FocusTarget or self.investigation then
+			continue
+		end
+
+		local data = stimulant.Data :: TypeStimulant.EnemySpottedByAllyData?
+		local target = if type(data) == "table" then data.Target else nil
+		local rootPart = if typeof(target) == "Instance" and target:IsA("Model") then target.PrimaryPart else nil
+		if rootPart then
+			self:_investigate(rootPart.Position)
+			return
+		end
+	end
+end
+
+function ChaseTargetsTask:_investigate(position: Vector3)
+	local investigation, createError = self.CharacterTasks.Investigate.new(position)
+	if not investigation then
+		warn("ChaseTargets could not create investigation:", createError)
+		return
+	end
+
+	local started, startError = self.Scheduler:Start(investigation)
+	if not started then
+		warn("ChaseTargets could not start investigation:", startError)
+		return
+	end
+
+	self.investigation = investigation
+	investigation.Terminated:Connect(function()
+		if self.investigation == investigation then
+			self.investigation = nil
+		end
+	end)
+end
+
 function ChaseTargetsTask:Start()
 	local started, errorMessage = Task.Start(self)
 	if not started then
@@ -287,6 +346,9 @@ function ChaseTargetsTask:Start()
 		end),
 		self.Events:Subscribe(TargettingEvents.LostFocusTarget, function()
 			self:SetFocusTarget(nil)
+		end),
+		self.Events:Subscribe(StimulantEvents.Pending, function(pending)
+			self:_onPendingStimulants(pending)
 		end),
 		-- Engage handing the target back is our cue to take over right now, and anything taking it from us means we let go
 		-- of the character right now
@@ -315,8 +377,13 @@ function ChaseTargetsTask:Start()
 		if self.FocusTarget then
 			self.Functions:CallFunction(FunctionEnum.RemoveFocusTarget)
 		end
-		-- the walk is a separate task and wouldn't end with us
+		-- the walk and the investigation are separate tasks and wouldn't end with us
 		self:StopMoving()
+		local investigation = self.investigation
+		self.investigation = nil
+		if investigation then
+			investigation:Stop("Chase ended")
+		end
 		self.FocusTarget = nil
 	end)
 

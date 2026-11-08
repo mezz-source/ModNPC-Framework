@@ -109,6 +109,7 @@ Existing ones:
 | `SprintingTowards` | ChaseTargets, when a sprint starts | the focus target | Low | 1s | `SprintingTowardsData` |
 | `BlockBroken` | Block task, when a hit breaks the guard | the attacker | High | the break animation (0.5s fallback) | none |
 | `Exhausted` | Stamina, as the character becomes exhausted | the focus target of its targetting task | Normal | 2s | `ExhaustedData` (Efficiency) |
+| `EnemySpottedByAlly` | Dialogue `CallOutTarget`, once the first responder's `SpotEnemyTeamed` line has been typed | its teammates in range (`ToGroup`, nothing sent if it has none) | Normal | 3s | `EnemySpottedByAllyData`: `Spotter`, `Target` |
 | `Died` | Damage, on `Humanoid.Died` | **everyone** (`ToAll`, a broadcast on purpose, so later systems can hear any death) | Normal | 5s, `Lingering` | `DiedData`: `Registered`, `Damage?` (killing hit: Attacker, Amount, DamageType, Special; only when registered), `LastAttacker?` |
 
 `Died` details: Damage stamps `fatalHit` before taking the health of a registered hit and clears it if the character
@@ -144,7 +145,7 @@ Consumers today:
 | --- | --- | --- |
 | `Defense` (see the `defense` skill) | `IncomingAttack` | consumes it and decides a dodge / last moment guard |
 | `Disposition` | `IncomingAttack`, `BlockBroken`, `Exhausted`, `SprintingTowards` | perceives without consuming: a pulse factor per stimulant (Threatened, TargetOpen, TargetTired, Charged) |
-| `DialogueBark` task (see the `dialogue` skill) | `Died` | perceives without consuming: if the dead `Source` is the last character it focused, barks `CombatEndVictory`. Remembers seen ids until they expire, since Pending re-offers them every tick |
+| `DialogueBark` task (see the `dialogue` skill) | `Died`, `EnemySpottedByAlly` | perceives without consuming. If the dead `Source` is the last character it focused, it barks `CombatEndVictory`. When a teammate's callout `Target` is its own focus, it barks `SpotEnemyTeamedResponse`, and until then the callout stays unseen, so a late focus still answers. It remembers the ids it acted on until they expire, since Pending re-offers them every tick |
 
 Several subscribers get the same Pending list; whoever subscribed first (Disposition is
 built before Defense) sees it first. A consumer that only *reads* must not consume, or it

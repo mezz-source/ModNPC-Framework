@@ -5,11 +5,14 @@ local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.Ty
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
 local TypePermissions = require(ServerScriptService.ModNPCServer.Types.v1.TypePermissions)
+local TypeState = require(ServerScriptService.ModNPCServer.Types.v1.TypeState)
 
 local FunctionEnum = TypeCharacterFunctions.FunctionEnum
 local Permissions = TypePermissions.Names
 local TargettingEvents = TypeCharacterEvents.Names.Targetting
 local WanderEvents = TypeCharacterEvents.Names.Wander
+local INVESTIGATE_STATE_KEY = TypeState.Keys.InvestigateState
+local InvestigateStateEnum = TypeState.InvestigateStateEnum
 
 local CategoryEnum = TypeTask.CategoriesEnum
 local Dependencies = TypeTask.Dependencies
@@ -41,6 +44,7 @@ function WanderTask.new(base, _: number?)
 			Dependencies.Events,
 			Dependencies.Functions,
 			Dependencies.Scheduler,
+			Dependencies.State,
 		},
 		Policy = TypeTask.Policy.Parallel,
 		Essential = true,
@@ -57,6 +61,7 @@ function WanderTask.new(base, _: number?)
 	self.Events = base.Events
 	self.Functions = base.Functions
 	self.Scheduler = base.Scheduler
+	self.State = base.State
 
 	-- The targets we know of, by character, and whether one is being focused. Wandering waits for both to be empty.
 	self.knownTargets = {} :: { [Model]: boolean }
@@ -224,6 +229,12 @@ function WanderTask:Update(deltaTime: number)
 
 	-- Nothing to do while there is someone to deal with, and while a walk of ours is going (it tells us when it ends)
 	if self:HasActiveTarget() or self.walk then
+		return
+	end
+
+	-- An Investigate task owns where we go until it ends (the walk we had going was ended when it started). Rest is
+	-- held, not run down, so the first wander after it comes a moment later rather than straight away.
+	if self.State:Is(INVESTIGATE_STATE_KEY, InvestigateStateEnum.Investigating) then
 		return
 	end
 

@@ -849,6 +849,7 @@ function Damage:_loseControl(state: string)
 
 	local functions = self.Base.Functions
 	functions:CallFunction(FunctionEnum.CancelCurrentAttack, true)
+	self.Base.Events:Dispatch(TypeCharacterEvents.Names.Combat.DamageInterrupt)
 	self.Base.Scheduler:StopCategory(TypeTask.CategoriesEnum.Movement, "Lost control")
 	-- a hit in the recovery of a parry (it can't reach one still in its window), or during a bounce
 	self.Base.Scheduler:StopTasks(
@@ -1006,6 +1007,7 @@ function Damage:_playReaction(amount: number, attackWeight: TypeDamage.HitCatego
 	-- can actually be interrupted.
 	if interruptsAttack(categoryName) then
 		self.Base.Functions:CallFunction(FunctionEnum.CancelCurrentAttack)
+		self.Base.Events:Dispatch(TypeCharacterEvents.Names.Combat.DamageInterrupt)
 	end
 
 	self:_playRandomAnimation(categoryName)

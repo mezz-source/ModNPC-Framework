@@ -64,7 +64,8 @@ function Events:Unsubscribe(eventName: string, subscriptionOrCallback): boolean
 	return false
 end
 
-function Events:Dispatch(eventName: string, arguments: any?)
+-- Anything after the payload is passed on to every callback after it, for events that carry more than one value
+function Events:Dispatch(eventName: string, arguments: any?, ...: any)
 	local subscriptions = self.Subscriptions[eventName]
 	if not subscriptions then
 		return false
@@ -79,7 +80,7 @@ function Events:Dispatch(eventName: string, arguments: any?)
 				self:Unsubscribe(eventName, subscription)
 			end
 
-			local success, errorMessage = pcall(subscription.Callback, arguments)
+			local success, errorMessage = pcall(subscription.Callback, arguments, ...)
 			if not success then
 				warn("Character event failed:", eventName, errorMessage)
 			end

@@ -68,8 +68,8 @@ end
 
 -- Ask the selector for the best of our known targets. Distance and health are relative and shift
 -- over time, so this is re-evaluated every search rather than only when the target list changes.
--- NewFocusTarget: none -> target. LostFocusTarget: target -> none.
--- FocusedTargetChanged: target -> a different target, as { Previous, Current }.
+-- NewFocusTarget: none -> target, with whether a teammate already claimed it (see ClaimTarget). LostFocusTarget: target ->
+-- none. FocusedTargetChanged: target -> a different target, as { Previous, Current }.
 function SearchTask:UpdateFocusTarget()
 	local best: TypeTargetting.TargettingContext? = nil
 	if self.Functions:CallFunction(FunctionEnum.IsValidTargetPreference, self.targettingPreference) then
@@ -90,7 +90,12 @@ function SearchTask:UpdateFocusTarget()
 	if previous and best then
 		self.Events:Dispatch(TargettingEvents.FocusedTargetChanged, { Previous = previous, Current = best })
 	elseif best then
-		self.Events:Dispatch(TargettingEvents.NewFocusTarget, best)
+		-- Claimed before it is announced, so whoever hears about it knows if a teammate saw it first
+		local alreadyClaimed = self.Functions:CallFunction(FunctionEnum.ClaimTarget, best.Character) == true
+		if not self:IsRunning() or self.FocusTarget ~= best then
+			return
+		end
+		self.Events:Dispatch(TargettingEvents.NewFocusTarget, best, alreadyClaimed)
 	elseif previous then
 		self.Events:Dispatch(TargettingEvents.LostFocusTarget, previous)
 	end
@@ -99,34 +104,30 @@ end
 -- Targets we are allowed to consider: whoever we are hostile to that hasn't taken itself off the target list, and only those
 -- within the provoke range. This runs every search, so a target that walks out of range drops out of our known targets (and
 -- our focus) instead of being chased forever. Each one comes with its handle, for whoever hears about it next.
+--
+-- The list of everyone comes from the snapshot every character shares, so a crowd of searches costs one request between them.
+-- The cheap handle checks go first and the range is measured once, in bulk, for whoever is left. The snapshot can be a
+-- moment old, so a target that has died since is checked for here.
 function SearchTask:GetViableTargets(): { TypeTargetting.TargettingContext }
 	local us = self.CharacterAPI:GetHandle()
 	if not us then
 		return {}
 	end
 
-	local contexts = self.CharacterAPI:GetAllTargets()
-	local characters = {}
-	for _, context in contexts do
-		table.insert(characters, context.Character)
-	end
-	local handles = self.CharacterAPI:GetHandles(characters)
-
-	local provokeRange = self.Distance:GetProvokeRange()
-	local viable = {}
-	for _, context in contexts do
-		local handle = handles[context.Character]
-		if
-			handle
-			and us:IsHostile(handle)
-			and handle:IsTargetable()
-			and (not provokeRange or self.Distance:IsWithin(context.Character, provokeRange))
-		then
-			context.Handle = handle
-			table.insert(viable, context)
+	local candidates = {}
+	for _, context in self.CharacterAPI:GetTargetSnapshot().Targets do
+		local handle = context.Handle
+		if handle and handle:IsAlive() and us:IsHostile(handle) and handle:IsTargetable() then
+			table.insert(candidates, context)
 		end
 	end
-	return viable
+
+	local provokeRange = self.Distance:GetProvokeRange()
+	if not provokeRange then
+		return candidates
+	end
+
+	return self.Distance:FilterWithin(candidates, provokeRange)
 end
 
 -- Sync our known targets with the latest search, firing spotted/lost for the differences.

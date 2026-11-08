@@ -32,6 +32,11 @@ export type FunctionCallbacks = {
 	GetTeammates: () -> { TypeTargetting.TargettingContext },
 	IsTeammate: (character: Model) -> boolean,
 	GetTeammateDistance: (character: Model) -> number?,
+	-- Every teammate's distance from us, measured together
+	GetTeammateDistances: () -> TypeDistance.Distances,
+	-- The nearest teammate / nearby friend and how far it is, nil when there is none
+	GetClosestTeammate: () -> (TypeTargetting.TargettingContext?, number?),
+	GetClosestFriend: () -> (TypeFriends.FriendContext?, number?),
 	GetFriends: () -> { TypeFriends.FriendContext },
 	GetNearbyFriends: () -> { TypeFriends.FriendContext },
 	IsFriend: (character: Model) -> boolean,
@@ -85,6 +90,8 @@ export type FunctionCallbacks = {
 		targets: { TypeTargetting.TargettingContext },
 		preference: TypeTargetting.TargettingPreference
 	) -> TypeTargetting.TargettingContext?,
+	-- Claims a newly focused target for our team (only on a team, with a teammate around); true if a teammate already held it
+	ClaimTarget: (target: Model) -> boolean,
 	PlaySound: (soundName: string, source: TypeCDN.ContentSource?) -> boolean,
 	PlaySoundCategory: (prefix: string, playbackSpeed: number?) -> boolean,
 	PlayVFX: (vfxName: string, destination: BasePart | Model, source: TypeCDN.ContentSource?) -> boolean,
@@ -171,6 +178,13 @@ export type FunctionCallbacks = {
 	StartBanter: (target: Model?) -> boolean,
 	-- Another character's banter reached us (the API calls it): a CombatBanterRespond line, if the rules allow
 	BanterRespond: (starter: Model?) -> boolean,
+	-- We just made a friend (we asked, they accepted): a SpotFriendStart line, then the friend is asked to answer
+	StartFriendGreeting: (friend: Model?) -> boolean,
+	-- Another character's greeting reached us (the API calls it): a SpotFriendResponse line, if the rules allow
+	FriendRespond: (starter: Model?) -> boolean,
+	-- First of our team to spot a target: a SpotEnemyTeamed line with a teammate in range, then the callout is passed on;
+	-- SpotEnemyIndividual with no team or nobody around
+	CallOutTarget: (target: Model?) -> boolean,
 }
 
 export type CharacterTasks = {
@@ -197,6 +211,10 @@ export type CharacterTasks = {
 	},
 	Wander: {
 		new: TypeTask.TaskConstructor,
+	},
+	-- Sprints to a position; completes on arrival, stops when a new focus target is acquired (or on timeout)
+	Investigate: {
+		new: (position: Vector3, timeout: number?) -> (TypeTask.Task?, string?),
 	},
 	Attack: {
 		new: (context: TypeAttack.AttackContext) -> (TypeTask.Task?, string?),
@@ -330,7 +348,11 @@ export type CharacterAPI = {
 	GetDialogueFrame: (self: CharacterAPI) -> TypeDialogueFrame.Frame?,
 	RemoveDialogueFrame: (self: CharacterAPI) -> boolean,
 	RequestBanterResponse: (self: CharacterAPI, target: Model) -> boolean,
+	RequestFriendResponse: (self: CharacterAPI, target: Model) -> boolean,
 	RequestFriend: (self: CharacterAPI, target: Model) -> TypeFriends.FriendOutcome,
+	ClaimTarget: (self: CharacterAPI, target: Model, duration: number?) -> TypeTargetting.TargetClaimAttempt?,
+	GetTargetClaimHolder: (self: CharacterAPI, target: Model) -> Model?,
+	ReleaseTargetClaim: (self: CharacterAPI, target: Model) -> boolean,
 	CreateHighlight: (
 		self: CharacterAPI,
 		highlightName: string,
@@ -357,6 +379,7 @@ export type CharacterAPI = {
 	GetPermissions: (self: CharacterAPI) -> { [string]: boolean }?,
 	SetPermission: (self: CharacterAPI, permission: string, isPermitted: boolean) -> (boolean, string?),
 	GetAllTargets: (self: CharacterAPI) -> { TypeTargetting.TargettingContext },
+	GetTargetSnapshot: (self: CharacterAPI, maxAge: number?) -> TypeTargetting.TargetSnapshot,
 	GetTargetsOfType: (self: CharacterAPI, characterType: string) -> { TypeTargetting.TargettingContext },
 	GetTeam: (self: CharacterAPI) -> string?,
 	GetDistanceBetween: (self: CharacterAPI, from: Model, to: Model) -> number?,
@@ -381,12 +404,12 @@ export type Events = {
 	Subscribe: (
 		self: Events,
 		eventName: string,
-		callback: (any?) -> (),
+		callback: (any?, ...any) -> (),
 		once: boolean?,
 		position: string?
 	) -> any,
 	Unsubscribe: (self: Events, eventName: string, subscriptionOrCallback: any) -> boolean,
-	Dispatch: (self: Events, eventName: string, arguments: any?) -> boolean,
+	Dispatch: (self: Events, eventName: string, arguments: any?, ...any) -> boolean,
 }
 
 export type HeartbeatConnection = {
@@ -486,6 +509,9 @@ export type Dialogue = {
 	SayLine: (self: Dialogue, category: string, data: TypeDialogueFrame.SayData?) -> boolean,
 	StartBanter: (self: Dialogue, target: Model?) -> boolean,
 	BanterRespond: (self: Dialogue, starter: Model?) -> boolean,
+	StartFriendGreeting: (self: Dialogue, friend: Model?) -> boolean,
+	FriendRespond: (self: Dialogue, starter: Model?) -> boolean,
+	CallOutTarget: (self: Dialogue, target: Model?) -> boolean,
 	Queue: (self: Dialogue, text: string, options: TypeDialogueFrame.LineOptions?) -> number,
 	Cancel: (self: Dialogue, id: number) -> boolean,
 	CancelCurrent: (self: Dialogue) -> boolean,
@@ -700,6 +726,7 @@ export type TargetSelector = {
 		targets: { TypeTargetting.TargettingContext },
 		preference: TypeTargetting.TargettingPreference
 	) -> TypeTargetting.TargettingContext?,
+	ClaimTarget: (self: TargetSelector, target: Model) -> boolean,
 }
 
 -- The characters on our side within our provoke range, and the friends we've connected with, updated after each search.
@@ -709,6 +736,9 @@ export type Friends = {
 	GetTeammates: (self: Friends) -> { TypeTargetting.TargettingContext },
 	IsTeammate: (self: Friends, character: Model) -> boolean,
 	GetTeammateDistance: (self: Friends, character: Model) -> number?,
+	GetTeammateDistances: (self: Friends) -> TypeDistance.Distances,
+	GetClosestTeammate: (self: Friends) -> (TypeTargetting.TargettingContext?, number?),
+	GetClosestFriend: (self: Friends) -> (TypeFriends.FriendContext?, number?),
 	GetFriends: (self: Friends) -> { TypeFriends.FriendContext },
 	GetNearbyFriends: (self: Friends) -> { TypeFriends.FriendContext },
 	IsFriend: (self: Friends, character: Model) -> boolean,
@@ -727,6 +757,12 @@ export type Distance = {
 	GetDistanceTo: (self: Distance, target: Model) -> number?,
 	GetDistanceToPosition: (self: Distance, position: Vector3) -> number?,
 	IsWithin: (self: Distance, target: Model, range: number) -> boolean,
+	-- Bulk: our position is read once, and so is each target's. What was measured a moment ago (maxAge, 0.05s unless
+	-- given; 0 measures fresh) is reused, so the passes of one search tick share their readings.
+	Measure: (self: Distance, targets: { TypeDistance.Measurable }, maxAge: number?) -> TypeDistance.Distances,
+	FilterWithin: (self: Distance, targets: { any }, range: number, maxAge: number?) -> { any },
+	Nearest: (self: Distance, targets: { any }, maxAge: number?) -> (any?, number?),
+	Furthest: (self: Distance, targets: { any }, maxAge: number?) -> (any?, number?),
 	GetRangeState: (
 		self: Distance,
 		target: Model,

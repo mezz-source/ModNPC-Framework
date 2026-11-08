@@ -16,6 +16,11 @@ local EngageStateEnum = TypeState.EngageStateEnum
 -- control back and forth every other tick.
 local ENGAGE_EXIT_MARGIN = 4
 
+-- How long a bulk reading is reused. The passes of one search tick (who is in range, who is the nearest, which friend is
+-- closest) run within a frame of each other, so they share what the first one read; at a walking pace this is well under a
+-- stud of drift. Pass a maxAge of 0 to a bulk measure for a reading that can't be reused.
+local MEASURE_LIFETIME = 0.05
+
 -- Which Ranges configuration value to hold for each TargettingRange thought setting
 local RANGE_SETTINGS = {
 	[TargettingRanges.Close] = "CloseEngage",
@@ -32,6 +37,10 @@ function Distance.new(Base: any, character: Model)
 	self.Character = character
 	self.CharacterAPI = Base.CharacterAPI
 	self.Configuration = Base.Configuration
+
+	-- The bulk readings of the moment: where we were, and how far each character measured was. Replaced as a whole once
+	-- it is older than the lifetime, so it never holds on to characters that left.
+	self.Measurements = nil :: { Taken: number, Origin: Vector3?, Distances: TypeDistance.Distances }?
 
 	-- No None in this enum: we start out pursuing, as nothing has been reached yet
 	Base.State:Register(ENGAGE_STATE_KEY, EngageStateEnum, EngageStateEnum.Pursuing)
@@ -137,6 +146,103 @@ function Distance:IsWithin(target: Model, range: number): boolean
 	return distance ~= nil and distance <= range
 end
 
+-- The measurements to add to: the current ones while they are young enough, new ones (with our position read again) if not
+function Distance:_getMeasurements(maxAge: number?)
+	local now = os.clock()
+	local measurements = self.Measurements
+	if measurements and now - measurements.Taken <= (maxAge or MEASURE_LIFETIME) then
+		return measurements
+	end
+
+	local handle = self.CharacterAPI:GetHandle()
+	measurements = {
+		Taken = now,
+		Origin = if handle then handle:GetPosition() else nil,
+		Distances = {},
+	}
+	self.Measurements = measurements
+	return measurements
+end
+
+-- Studs between us and every one of the targets, keyed by character; those that can't be measured (no root part) are left
+-- out. Our position is read once and each target's once, off its Handle when it has one; the ones without a handle are
+-- looked up together in a single request. Targets measured within maxAge seconds are not read again.
+function Distance:Measure(targets: { TypeDistance.Measurable }, maxAge: number?): TypeDistance.Distances
+	local measurements = self:_getMeasurements(maxAge)
+	local origin = measurements.Origin
+	local measured = measurements.Distances
+	local result: TypeDistance.Distances = {}
+	if not origin then
+		return result
+	end
+
+	local function measureFrom(character: Model, handle: any)
+		local position = handle:GetPosition()
+		if position then
+			local distance = (origin - position).Magnitude
+			measured[character] = distance
+			result[character] = distance
+		end
+	end
+
+	local unhandled: { Model } = {}
+	for _, target in targets do
+		local character = target.Character
+		local known = measured[character]
+		if known then
+			result[character] = known
+		elseif target.Handle then
+			measureFrom(character, target.Handle)
+		else
+			table.insert(unhandled, character)
+		end
+	end
+
+	if #unhandled > 0 then
+		for character, handle in self.CharacterAPI:GetHandles(unhandled) do
+			measureFrom(character, handle)
+		end
+	end
+
+	return result
+end
+
+-- The targets no further than `range` studs, in the order they were given
+function Distance:FilterWithin(targets: { any }, range: number, maxAge: number?): { any }
+	local distances = self:Measure(targets, maxAge)
+	local within = {}
+	for _, target in targets do
+		local distance = distances[target.Character]
+		if distance and distance <= range then
+			table.insert(within, target)
+		end
+	end
+	return within
+end
+
+-- The target with the lowest (or highest) distance and that distance. Ties go to the earlier target.
+local function pickByDistance(self: any, targets: { any }, maxAge: number?, preferLowest: boolean): (any?, number?)
+	local distances = self:Measure(targets, maxAge)
+	local best: any? = nil
+	local bestDistance: number? = nil
+	for _, target in targets do
+		local distance = distances[target.Character]
+		if distance and (bestDistance == nil or (if preferLowest then distance < bestDistance else distance > bestDistance)) then
+			best = target
+			bestDistance = distance
+		end
+	end
+	return best, bestDistance
+end
+
+function Distance:Nearest(targets: { any }, maxAge: number?): (any?, number?)
+	return pickByDistance(self, targets, maxAge, true)
+end
+
+function Distance:Furthest(targets: { any }, maxAge: number?): (any?, number?)
+	return pickByDistance(self, targets, maxAge, false)
+end
+
 -- Where the target sits against the range, nil when the distance can't be measured
 function Distance:GetRangeState(target: Model, ideal: number, tooCloseDiff: number?): TypeDistance.RangeState?
 	local distance = self:GetDistanceTo(target)
@@ -154,6 +260,7 @@ function Distance:IsInRange(target: Model, ideal: number, tooCloseDiff: number?)
 end
 
 function Distance:Destroy()
+	self.Measurements = nil
 	self.CharacterAPI = nil
 	self.Configuration = nil
 	self.Base = nil

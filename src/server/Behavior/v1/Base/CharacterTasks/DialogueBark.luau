@@ -19,6 +19,7 @@ local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.Ty
 local TypeCharacterFunctions = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterFunctions)
 local TypeDamage = require(ServerScriptService.ModNPCServer.Types.v1.TypeDamage)
 local TypeDialogueFrame = require(ServerScriptService.ModNPCServer.Types.v1.TypeDialogueFrame)
+local TypeFriends = require(ServerScriptService.ModNPCServer.Types.v1.TypeFriends)
 local TypeStimulant = require(ServerScriptService.ModNPCServer.Types.v1.TypeStimulant)
 local TypeTargetting = require(ServerScriptService.ModNPCServer.Types.v1.TypeTargetting)
 local Task = require(script.Parent.Parent.Task)
@@ -92,20 +93,49 @@ local BARKS: { [string]: BarkHandler } = {
 		return "Idle", { RollChattiness = true }
 	end,
 
-	-- Someone to fight
-	[EventNames.Targetting.NewFocusTarget] = function()
-		return "SpotEnemyIndividual", nil
+	-- We changed sides: a betrayal. Not rolled for chattiness, it is a big moment.
+	[EventNames.Targetting.TeamChanged] = function()
+		return "TeamChanged", nil
 	end,
 
-	-- Someone died (the Died stimulant is broadcast to everyone). If it was the last target we focused, we won. Only read,
-	-- never consumed, so whatever else reacts to deaths still sees it.
+	-- A friend turned on our team. Its name fills a %s.
+	[EventNames.Targetting.FriendBetrayed] = function(_self, betrayal: TypeFriends.FriendBetrayal)
+		return "FriendlyTeamChanged", { Names = { betrayal.Character.Name } }
+	end,
+
+	[EventNames.Investigate.Started] = function(_position)
+		return "InvestigateStart", nil
+	end,
+
+	[EventNames.Investigate.Ended] = function(_position, FoundTarget: boolean, _Target, _reason)
+		if FoundTarget then return nil, nil end
+		return "InvestigateFail", nil
+	end,
+
+	-- Stimulants worth a word. Only read, never consumed, so whatever else reacts to them still sees them.
+	--   Died (broadcast to everyone): if it was the last target we focused, we won; if it was a teammate, we mourn.
+	--   EnemySpottedByAlly: a teammate called out a target first (it holds our team's claim). Once that target is ours too,
+	--   we answer with SpotEnemyTeamedResponse (the spotter's name fills a %s). Until then it stays unseen, so if the callout beat our
+	--   own search to the target, we still answer on a later tick while it lasts.
 	[EventNames.Stimulant.Pending] = function(self, pending: { TypeStimulant.StimulantEvent })
 		for _, stimulant in pending do
-			if stimulant.Name == StimulantNames.Died and self:_isNewDeath(stimulant) then
+			if stimulant.Name == StimulantNames.EnemySpottedByAlly then
+				local data = stimulant.Data :: TypeStimulant.EnemySpottedByAllyData?
+				local spotter = if type(data) == "table" then data.Spotter else nil
+				local target = if type(data) == "table" then data.Target else nil
+				if spotter and target and target == self.lastFocus and self:_isNew(stimulant) then
+					return "SpotEnemyTeamedResponse", { Names = { spotter.Name } }
+				end
+			elseif stimulant.Name == StimulantNames.Died and self:_isNew(stimulant) then
 				local fallen = stimulant.Source
 				if fallen and fallen == self.lastFocus then
 					self.lastFocus = nil
 					return "CombatEndVictory", nil
+				elseif fallen and fallen ~= self.lastFocus then
+					local isFriend = self.Base.Functions:CallFunction(FunctionEnum.IsTeammate, fallen)
+					if isFriend then
+						return "FriendlyDead", {Names = {fallen.Name}}
+					end
 				end
 			end
 		end
@@ -120,7 +150,7 @@ function DialogueBarkTask.new(base, _: number?)
 		Resources = {},
 		Dependencies = {
 			Dependencies.Events,
-			Dependencies.Functions,
+			Dependencies.Functions
 		},
 		Policy = TypeTask.Policy.Parallel,
 		Essential = true,
@@ -134,29 +164,31 @@ function DialogueBarkTask.new(base, _: number?)
 	self.Events = base.Events
 	self.Functions = base.Functions
 	self.subscriptions = {} :: { any }
+
 	-- The last character we focused. Kept after the focus is lost: a target that dies is dropped from our targets, quite
 	-- possibly before its Died stimulant is read, and it should still count as ours.
 	self.lastFocus = nil :: Model?
-	-- Died stimulants already looked at, by id, until they expire: Pending offers them again on every reaction tick
-	self.seenDeaths = {} :: { [number]: number }
+	-- Stimulants already acted on, by id, until they expire: Pending offers them again on every reaction tick
+	self.seen = {} :: { [number]: number }
 
 	return self
 end
 
--- Whether this Died stimulant hasn't been looked at before (and remembers it now). Forgets the ones that have expired.
-function DialogueBarkTask:_isNewDeath(stimulant: TypeStimulant.StimulantEvent): boolean
+-- Whether this stimulant hasn't been acted on before (and remembers it now). Forgets the ones that have expired. Call it
+-- last, once everything else says we would act, so a stimulant we pass over now can still be acted on later.
+function DialogueBarkTask:_isNew(stimulant: TypeStimulant.StimulantEvent): boolean
 	local now = os.clock()
-	for id, expiresAt in self.seenDeaths do
+	for id, expiresAt in self.seen do
 		if expiresAt <= now then
-			self.seenDeaths[id] = nil
+			self.seen[id] = nil
 		end
 	end
 
-	if self.seenDeaths[stimulant.Id] then
+	if self.seen[stimulant.Id] then
 		return false
 	end
 
-	self.seenDeaths[stimulant.Id] = stimulant.ExpiresAt
+	self.seen[stimulant.Id] = stimulant.ExpiresAt
 	return true
 end
 
@@ -170,6 +202,16 @@ function DialogueBarkTask:_trackFocus()
 	end)
 end
 
+-- Someone to fight (NewFocusTarget). A teammate who claimed it first is the one who calls it out, so we leave it to them;
+-- otherwise we are first, or on our own, and call it out ourselves.
+function DialogueBarkTask:_spotEnemy(context: TypeTargetting.TargettingContext, alreadyClaimed: boolean?)
+	if alreadyClaimed == true then
+		return
+	end
+
+	self.Functions:CallFunction(FunctionEnum.CallOutTarget, context.Character)
+end
+
 -- Says a random line of the category (see Dialogue:SayLine). Returns whether it is playing.
 function DialogueBarkTask:Bark(category: string, data: SayData?): boolean
 	if not self:IsRunning() then
@@ -180,12 +222,12 @@ function DialogueBarkTask:Bark(category: string, data: SayData?): boolean
 end
 
 -- Calls the handler on every dispatch of the event while the task runs; unsubscribed when it ends
-function DialogueBarkTask:Listen(eventName: string, handler: (payload: any) -> ())
+function DialogueBarkTask:Listen(eventName: string, handler: (payload: any, ...any) -> ())
 	table.insert(
 		self.subscriptions,
-		self.Events:Subscribe(eventName, function(payload)
+		self.Events:Subscribe(eventName, function(payload, ...)
 			if self:IsRunning() then
-				handler(payload)
+				handler(payload, ...)
 			end
 		end)
 	)
@@ -205,6 +247,18 @@ function DialogueBarkTask:Start()
 		self.Functions:CallFunction(FunctionEnum.StartBanter, ended.Target)
 	end)
 
+	self:Listen(EventNames.Targetting.NewFocusTarget, function(context, alreadyClaimed)
+		self:_spotEnemy(context, alreadyClaimed)
+	end)
+
+	-- A connection we asked for was accepted (FriendAdded only comes after the outcome, and Initiated is only true for the
+	-- one who asked): greet the new friend, who is asked to answer once we're done. The one asked says nothing until then.
+	self:Listen(EventNames.Targetting.FriendAdded, function(friend: TypeFriends.FriendContext)
+		if friend.Initiated then
+			self.Functions:CallFunction(FunctionEnum.StartFriendGreeting, friend.Character)
+		end
+	end)
+
 	for eventName, handler in BARKS do
 		self:Listen(eventName, function(payload)
 			local category, data = handler(self, payload)
@@ -219,7 +273,7 @@ function DialogueBarkTask:Start()
 			subscription.Unsubscribe()
 		end
 		table.clear(self.subscriptions)
-		table.clear(self.seenDeaths)
+		table.clear(self.seen)
 		self.lastFocus = nil
 	end)
 

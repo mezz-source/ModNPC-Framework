@@ -1,3 +1,5 @@
+local ServerScriptService = game:GetService("ServerScriptService")
+local TypeCharacterEvents = require(ServerScriptService.ModNPCServer.Types.v1.TypeCharacterEvents)
 local TypeDialogue = {}
 
 -- How one character of a line looks. Styles are frozen and shared: consecutive characters under the same tags hold the same
@@ -204,6 +206,13 @@ TypeDialogue.Events = table.freeze({
 	PlayAnimation = "anim",
 	-- Stop the character's animation of this name (Event.Arg)
 	StopAnimation = "stopanim",
+})
+
+TypeDialogue.EventDispatchNames = table.freeze({
+	[TypeDialogue.Events.Sfx] = TypeCharacterEvents.Names.Dialogue.SfxEvent,
+	[TypeDialogue.Events.PlayAnimation] = TypeCharacterEvents.Names.Dialogue.PlayAnimationEvent,
+	[TypeDialogue.Events.StopAnimation] = TypeCharacterEvents.Names.Dialogue.StopAnimationEvent,
+	[TypeDialogue.Events.Event] = TypeCharacterEvents.Names.Dialogue.Event,
 })
 
 return TypeDialogue

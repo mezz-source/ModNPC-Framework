@@ -28,7 +28,12 @@ character (`CancelEssentials`).
    you need, add it: payload type + name in `TypeCharacterEvents`, a `Dispatch` where the thing happens (see the `events`
    skill). Dispatch *after* the state is applied, so listeners see the new state. Existing ones used by barks: `Combat.*`
    (AttackLanded, Launched, LaunchEnded, DamageTaken, DefenseSucceeded, BlockBroken), `Stamina.ExhaustionStarted/Ended`,
-   `Wander.NewPosition`, `Humanoid.Died`, `Targetting.NewFocusTarget`, `Stimulant.Pending` (Died -> CombatEndVictory).
+   `Wander.NewPosition`, `Humanoid.Died`, `Stimulant.Pending` (Died -> CombatEndVictory). `Targetting.NewFocusTarget` is
+   not in BARKS. It carries `(context, alreadyClaimed)`, and the bark task's `_spotEnemy` stays quiet when a teammate
+   claimed the target first (`FunctionEnum.ClaimTarget`, a per-team API claim). Otherwise it calls
+   `FunctionEnum.CallOutTarget`, which says a `SpotEnemyTeamed` line when on a team with a teammate in range, then sends the
+   `EnemySpottedByAlly` stimulant to those teammates once the line is typed. With no team or no teammate around it says
+   `SpotEnemyIndividual` and sends nothing.
 2. **Add the entry to `BARKS`.** Key is the event name; the handler gets `(self, payload)` and returns
    `category, SayData?`, or `nil` to stay quiet:
 
@@ -46,7 +51,9 @@ character (`CancelEssentials`).
 
    **Reacting to other characters (stimulants).** Hook `EventNames.Stimulant.Pending` (payload: the queued stimulants, most
    urgent first). Pending is re-dispatched on *every* reaction tick while a stimulant is queued, so remember the ids you
-   handled (`self:_isNewDeath` keeps them until `ExpiresAt`) or the bark repeats. Only read them: never `ConsumeStimulant`
+   handled (`self:_isNew` keeps them until `ExpiresAt`; call it last, after every other condition, so a stimulant you pass
+   over now can still be acted on later) or the bark repeats. A second example: `EnemySpottedByAlly` whose `Data.Target`
+   is `self.lastFocus` barks `SpotEnemyTeamedResponse`, with the spotter's name filling a `%s`. Only read them: never `ConsumeStimulant`
    from a bark, other systems react to the same stimulant. Example: `Died` (broadcast to everyone) whose `Source` is
    `self.lastFocus` barks `CombatEndVictory`. `lastFocus` is tracked by the task itself (`_trackFocus`) and kept after the
    focus is lost, because a dead target is usually dropped from targetting before its Died stimulant is read. Anything that isn't one event -> one category can use `self:Listen(eventName, fn)` and
@@ -67,8 +74,20 @@ under the target's own rules (cooldown, priority; no chattiness roll). A refusal
 **successful request with Data = false**, never a warning: banter is optional. Only malformed requests fail.
 
 The pattern for any "say X, then let someone answer" exchange: `_sayCategory(category, data, onPlayed)` reports the sequence
-when the line actually plays (after its random delay), and `_whenTyped(sequence, callback)` tells you when it was typed. Keep
-cross-character calls in a narrow API endpoint like `requestBanterResponse`, not a generic "call any function on any NPC".
+when the line actually plays (after its random delay), and `_whenTyped(sequence, callback)` tells you when it was typed.
+`Dialogue:_startExchange(startCategory, data, target, request)` wraps exactly that and is what banter and friend greetings use.
+Keep cross-character calls in a narrow API endpoint like `requestBanterResponse`, not a generic "call any function on any NPC".
+
+## Friend greeting (same route as banter)
+
+When a friend request **we sent** is accepted, `Friends` dispatches `FriendAdded` with `Initiated = true` (only on the asker; the
+one asked gets `Initiated = false`). The bark task listens for that and calls `FunctionEnum.StartFriendGreeting(friend)` ->
+`Dialogue:StartFriendGreeting`: a `SpotFriendStart` line (the friend's name fills a `%s`, no chattiness roll), and once it is
+typed `CharacterAPI:RequestFriendResponse(friend)` -> API `Dialogue.requestFriendResponse` -> the friend's `FriendRespond`
+function -> a `SpotFriendResponse` line under their own rules. Because `FriendAdded` only comes after the outcome, a declined
+or failed request never greets. Don't bark from `RequestFriend`/`ReceiveFriendRequest` subscriptions: they run before the
+outcome exists. The API's `requestBanterResponse` and `requestFriendResponse` share one helper, so both answers are a
+successful request with `Data = false` when refused.
 
 ## SayData (second argument of SayLine)
 

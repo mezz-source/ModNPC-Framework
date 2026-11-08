@@ -20,11 +20,15 @@ local WeaponStateEnum = TypeState.WeaponStateEnum
 
 -- The core tool animations. Every weapon brings its own in the Core category of its Assets/Animations (the NPC's own
 -- Core animations are the fallback when it does not). They are tracks named like the animation, loaded as that
--- weapon's content so they go when it does.
+-- weapon's content so they go when it does. All but ToolHold are expected; a missing one is warned about.
 local ARMED = "ToolArmed"
 local DISARM = "ToolDisarm"
 local ARM_LOOP = "ToolArmLoop"
+-- How the weapon is held while it is in hand, armed or not. Optional: a weapon without one just has no hold pose.
+local HOLD = "ToolHold"
 local ANIMATION_CATEGORY = "Core"
+local CORE_ANIMATIONS = { ARMED, DISARM, ARM_LOOP, HOLD }
+local OPTIONAL_ANIMATIONS = { [HOLD] = true }
 
 local FADE_TIME = 0.2
 
@@ -32,16 +36,19 @@ local FADE_TIME = 0.2
 local ALWAYS_ARMED_SETTING = { "WeaponSettings", "AlwaysArmed" }
 
 -- The transitions are one-shots over everything else. The loop only holds the weapon pose, so it sits above the walk
--- and sprint cycles (Idle) to keep the arms where they are while the legs still walk.
+-- and sprint cycles (Idle) to keep the arms where they are while the legs still walk. The hold is the lowest of all, so
+-- anything else that moves the same joints shows over it.
 local ANIMATION_PRIORITIES = {
 	[ARMED] = Enum.AnimationPriority.Action,
 	[DISARM] = Enum.AnimationPriority.Action,
 	[ARM_LOOP] = Enum.AnimationPriority.Movement,
+	[HOLD] = Enum.AnimationPriority.Core,
 }
 local ANIMATION_LOOPS = {
 	[ARMED] = false,
 	[DISARM] = false,
 	[ARM_LOOP] = true,
+	[HOLD] = true,
 }
 
 -- One weapon is in hand at a time: equipping another drops the one held. A weapon is equipped by the name of a model
@@ -268,10 +275,12 @@ end
 -- The weapon's core animations come from its own assets. They are loaded as the weapon's content (the source), which
 -- is what unloads the tracks when it is unequipped.
 function Weapons:_loadAnimations(weapon: Instance)
-	for _, animationName in ipairs({ ARMED, DISARM, ARM_LOOP }) do
+	for _, animationName in ipairs(CORE_ANIMATIONS) do
 		local animation = self.Base.Assets:GetAnimation(ANIMATION_CATEGORY .. "/" .. animationName, weapon)
 		if not animation then
-			warn("Weapon", weapon.Name, "has no", ANIMATION_CATEGORY .. "/" .. animationName, "animation")
+			if not OPTIONAL_ANIMATIONS[animationName] then
+				warn("Weapon", weapon.Name, "has no", ANIMATION_CATEGORY .. "/" .. animationName, "animation")
+			end
 			continue
 		end
 
@@ -349,6 +358,11 @@ function Weapons:_equipped(weapon: Instance)
 	self:_loadCategoryAnimations(weapon, TypeBlock.AnimationCategory, TypeBlock.AnimationSettings)
 	self:_loadCategoryAnimations(weapon, TypeParry.AnimationCategory, TypeParry.AnimationSettings)
 	self:_loadBounceAnimations(weapon)
+
+	-- Held for as long as the weapon is equipped; its track unloads with the weapon's source, which ends it
+	if self.Loaded[HOLD] then
+		self:_play(HOLD)
+	end
 
 	if self.AlwaysArmed or next(self.Targets) ~= nil then
 		self:_callForArms()

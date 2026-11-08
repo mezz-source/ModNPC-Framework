@@ -80,6 +80,7 @@ TypeAPI.Functions = table.freeze({
 		GetFrame = "getFrame",
 		RemoveFrame = "removeFrame",
 		RequestBanterResponse = "requestBanterResponse",
+		RequestFriendResponse = "requestFriendResponse",
 	},
 	Highlights = {
 		CreateHighlight = "createHighlight",
@@ -149,6 +150,9 @@ TypeAPI.Functions = table.freeze({
 		GetTargetsWithTeamFilter = "getTargetsWithTeamFilter",
 		GetDistance = "getDistance",
 		GetDistanceToPosition = "getDistanceToPosition",
+		ClaimTarget = "claimTarget",
+		GetTargetClaim = "getTargetClaim",
+		ReleaseTargetClaim = "releaseTargetClaim",
 	},
 	Sound = {
 		LoadSounds = "loadSounds",

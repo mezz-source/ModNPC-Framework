@@ -11,7 +11,31 @@ export type TargettingContext = {
 	Handle: TypeCharacterHandle.CharacterHandle?,
 }
 
+-- Everyone the API tracks right now, each with its handle (whoever has none is left out). One of these is shared by every
+-- character in the world and frozen, so nothing in it can be changed by whoever is reading: copy what you need to keep.
+export type TargetSnapshot = {
+	-- os.clock() when the list was taken
+	Taken: number,
+	Targets: { TargettingContext },
+}
+
 export type HealthInfo = TypeCharacterHandle.HealthInfo
+
+-- A short lived claim on a target, one per team: the first of a team to claim a target holds it until it is released or
+-- runs out. Data of Targetting.getTargetClaim
+export type TargetClaim = {
+	-- Who on the asker's team holds the target, nil if nobody (can be the asker itself)
+	Holder: Model?,
+}
+
+-- Data of Targetting.claimTarget
+export type TargetClaimAttempt = {
+	-- True if this call took the claim
+	Claimed: boolean,
+	-- Who holds the target now: the claimer if Claimed, otherwise whoever got there first (can be the claimer itself if it
+	-- already held it)
+	Holder: Model?,
+}
 
 export type TargettingPreference = 
 "ShortestDistance" |

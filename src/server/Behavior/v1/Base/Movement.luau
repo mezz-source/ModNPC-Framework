@@ -20,6 +20,7 @@ local SPRINT_COST = TypeStamina.Costs.Sprint
 local DODGE_COST = TypeStamina.Costs.Dodge
 local MOVE_STATE_KEY = TypeState.Keys.MoveState
 local DODGE_STATE_KEY = TypeState.Keys.DodgeState
+local INVESTIGATE_STATE_KEY = TypeState.Keys.InvestigateState
 
 -- How long a dodge is active (seconds), and the velocity change (studs/s) it throws the character with
 local DODGE_DURATION = 0.3
@@ -63,6 +64,8 @@ function Movement.new(base, character)
 
 	self.Base.State:Register(MOVE_STATE_KEY, MoveStateEnum)
 	self.Base.State:Register(DODGE_STATE_KEY, DodgeStateEnum)
+	-- held by the Investigate task, read by Wander
+	self.Base.State:Register(INVESTIGATE_STATE_KEY, TypeState.InvestigateStateEnum)
 	self.EventSubscriptions = {
 		self.Base.Events:Subscribe(HumanoidEvents.MoveBegan, function()
 			self:_setMoving(true)

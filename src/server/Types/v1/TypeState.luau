@@ -17,6 +17,7 @@ export type ParryState = "None" | "Parrying" | "Recovering"
 export type BounceState = "None" | "Bouncing"
 export type DefenseState = "None" | "Reacting"
 export type WeaponState = "None" | "Equipped"
+export type InvestigateState = "None" | "Investigating"
 
 -- State registers nothing itself; each state is registered by the module that owns it (HealthStatus: Damage)
 TypeState.Keys = table.freeze({
@@ -34,6 +35,7 @@ TypeState.Keys = table.freeze({
 	BounceState = "BounceState",
 	DefenseState = "DefenseState",
 	WeaponState = "WeaponState",
+	InvestigateState = "InvestigateState",
 })
 
 TypeState.HealthStatusEnum = table.freeze({
@@ -127,6 +129,13 @@ TypeState.DefenseStateEnum = table.freeze({
 TypeState.WeaponStateEnum = table.freeze({
 	None = "None",
 	Equipped = "Equipped",
+})
+
+-- Registered by Movement, held by an Investigate task. Investigating while it sprints to a spot it was sent to look at,
+-- during which Wander starts no walks of its own (the two would fight over where the character goes).
+TypeState.InvestigateStateEnum = table.freeze({
+	None = "None",
+	Investigating = "Investigating",
 })
 
 return TypeState

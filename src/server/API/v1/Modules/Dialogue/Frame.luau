@@ -20,6 +20,7 @@ local TypeCDN = require(ServerScriptService.ModNPCServer.Types.v1.TypeCDN)
 local TypeDialogueFrame = require(ServerScriptService.ModNPCServer.Types.v1.TypeDialogueFrame)
 local Board = require(script.Parent.Board)
 local Presenter = require(script.Parent.Presenter)
+local TypeDialogue = require(script.Parent.TypeDialogue)
 
 local FrameClass = {}
 
@@ -108,7 +109,7 @@ function FrameClass.new(gui: BillboardGui, adornee: BasePart, options: FrameOpti
 		local newSound = Instance.new("Sound")
 		newSound.Name = SOUND_NAME
 		newSound.SoundId = talkSound.SoundId
-		newSound.RollOffMaxDistance = 50
+		newSound.RollOffMaxDistance = 200
 		if talkSound.Volume ~= nil then
 			newSound.Volume = talkSound.Volume
 		end

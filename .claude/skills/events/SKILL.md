@@ -29,7 +29,9 @@ callback to `Unsubscribe`.
 1. Choose a stable, character-scoped event name and document its payload shape
    near the producer or in the related type.
 2. Add the producer at the point where the state transition is known. Call
-   `base.Events:Dispatch("EventName", payload)`.
+   `base.Events:Dispatch("EventName", payload)`. Extra arguments after the payload are passed through to every callback
+   (`Dispatch(name, payload, extra)` -> `callback(payload, extra)`), for events that carry more than one value, e.g.
+   `NewFocusTarget`'s `alreadyClaimed`.
 3. Subscribe in the owning behavior/mod script and retain the subscription when
    it may need to be removed.
 4. Add or update `TypeBehavior.Events` if the public method or callback shape
